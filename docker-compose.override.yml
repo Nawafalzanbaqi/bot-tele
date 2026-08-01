@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# Local development overrides (merged automatically by `docker compose up`).
+#
+# Differences from the production definition:
+#   * builds the `dev` image stage (editable install + dev tooling)
+#   * bind-mounts the working tree so uvicorn --reload picks up edits
+#   * exposes Postgres and Redis on the host for inspection
+# ---------------------------------------------------------------------------
+services:
+  api:
+    build:
+      target: dev
+    image: mediahub/api:dev
+    environment:
+      MEDIAHUB_ENVIRONMENT: local
+      MEDIAHUB_DEBUG: "true"
+      MEDIAHUB_LOGGING__LEVEL: DEBUG
+      MEDIAHUB_LOGGING__JSON_FORMAT: "false"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
+    command:
+      - uvicorn
+      - mediahub.presentation.api.app:create_app
+      - --factory
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/src
+
+  postgres:
+    ports:
+      - "${MEDIAHUB_POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${MEDIAHUB_REDIS_PORT:-6379}:6379"

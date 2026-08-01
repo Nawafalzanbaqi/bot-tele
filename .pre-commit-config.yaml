@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Git hooks. Install once with `pre-commit install` (or `make install`).
+# The same tools run in CI, so a clean commit means a green pipeline.
+# ---------------------------------------------------------------------------
+default_language_version:
+  python: python3.13
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        pass_filenames: false
+        args: []
+        additional_dependencies:
+          - pydantic>=2.10.0
+          - pydantic-settings>=2.7.0
+          - fastapi>=0.115.0
+          - sqlalchemy[asyncio]>=2.0.36
+          - loguru>=0.7.3
+          - pytest>=8.3.0

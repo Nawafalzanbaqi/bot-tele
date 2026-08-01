@@ -1,0 +1,249 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# ---------------------------------------------------------------------------
+# Project metadata
+# ---------------------------------------------------------------------------
+[project]
+name = "mediahub"
+version = "0.1.0"
+description = "Production-grade, self-hosted media hub built on Clean Architecture."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "MediaHub Contributors" }]
+keywords = ["fastapi", "clean-architecture", "self-hosted", "media", "async"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.11.0",       # PEP 695 generic models
+    "pydantic-settings>=2.7.0",
+    "loguru>=0.7.3",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "yt-dlp>=2025.1.15",
+    "python-telegram-bot>=21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.9.0",
+    "black>=24.10.0",
+    "mypy>=1.14.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "pre-commit>=4.0.0",
+]
+
+[project.urls]
+Documentation = "https://github.com/your-org/mediahub/blob/main/README.md"
+Source = "https://github.com/your-org/mediahub"
+
+[project.scripts]
+mediahub = "mediahub.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mediahub"]
+
+# ---------------------------------------------------------------------------
+# Ruff - linting (formatting is delegated to Black)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "A",     # flake8-builtins
+    "ANN",   # flake8-annotations (strict typing)
+    "ARG",   # flake8-unused-arguments
+    "ASYNC", # flake8-async
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "D",     # pydocstyle - every module/class/function is documented
+    "DTZ",   # flake8-datetimez - no naive datetimes
+    "E",     # pycodestyle errors
+    "EM",    # flake8-errmsg
+    "ERA",   # eradicate (no commented-out code)
+    "F",     # pyflakes
+    "FA",    # flake8-future-annotations
+    "G",     # flake8-logging-format
+    "I",     # isort
+    "ICN",   # flake8-import-conventions
+    "INP",   # flake8-no-pep420 (implicit namespace packages)
+    "N",     # pep8-naming
+    "PERF",  # perflint
+    "PIE",   # flake8-pie
+    "PL",    # pylint
+    "PT",    # flake8-pytest-style
+    "PTH",   # flake8-use-pathlib
+    "Q",     # flake8-quotes
+    "RET",   # flake8-return
+    "RSE",   # flake8-raise
+    "RUF",   # ruff-specific rules
+    "S",     # flake8-bandit
+    "SIM",   # flake8-simplify
+    "SLF",   # flake8-self
+    "T10",   # flake8-debugger
+    "T20",   # flake8-print
+    "TID",   # flake8-tidy-imports
+    "TRY",   # tryceratops
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+ignore = [
+    "A003",   # attributes named `id`/`type` are the natural API/DTO contract
+    "ANN401", # `Any` is required by a few framework-facing signatures
+    "ISC001", # conflicts with the formatter
+    "COM812", # conflicts with the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S105/S106: a "resume token" is a checkpoint offset, not a credential, and
+# tests state literal ones constantly.
+"tests/**/*.py" = [
+    "ANN",
+    "ARG",
+    "ASYNC109",
+    "ASYNC240",
+    "D",
+    "PLR2004",
+    "S101",
+    "S105",
+    "S106",
+    "SLF001",
+]
+"migrations/**/*.py" = ["ANN", "D", "ERA001", "INP001"]
+# ASYNC109 objects to a `timeout` parameter on an async function. Telegram's
+# long-poll timeout is a Bot API parameter sent to the server, not an asyncio
+# deadline, and a drain budget is a deliberate part of the shutdown contract.
+"src/mediahub/presentation/telegram/api.py" = ["ASYNC109"]
+"src/mediahub/presentation/telegram/handlers.py" = ["ASYNC109"]
+"src/mediahub/infrastructure/delivery/telegram/client.py" = ["ASYNC109"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["mediahub"]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.pylint]
+max-args = 8
+
+# ---------------------------------------------------------------------------
+# Black - formatting
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.venv
+  | migrations/versions
+)/
+'''
+
+# ---------------------------------------------------------------------------
+# Mypy - strict static typing
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unreachable = true
+warn_no_return = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["migrations.*"]
+ignore_errors = true
+
+# yt-dlp ships no type information. It is confined to one package, and the
+# adapter re-types everything it returns at the boundary.
+[[tool.mypy.overrides]]
+module = ["yt_dlp.*"]
+ignore_missing_imports = true
+
+# psutil is an optional convenience for the benchmark suite: it gives an exact
+# descriptor count where it happens to be installed, and the suite falls back to
+# /proc or a probe where it is not. Requiring stubs for a dependency the project
+# does not depend on would be a build failure over a nicety.
+[[tool.mypy.overrides]]
+module = ["psutil.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+    "--cov=mediahub",
+    "--cov-report=term-missing",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: fast, isolated tests with no I/O",
+    "integration: tests that exercise adapters or the HTTP surface",
+    "architecture: tests that enforce Clean Architecture boundaries",
+    "security: tests that assert a security control still holds",
+    "chaos: tests that kill something mid-flight and assert the system recovers",
+    "failure: tests that reproduce one named production failure and its recovery",
+    "benchmark: tests that measure a resource cost and assert a ceiling on it",
+    "network: requires real internet access; skipped unless MEDIAHUB_NETWORK_TESTS=1",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["src/mediahub"]
+omit = ["src/mediahub/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

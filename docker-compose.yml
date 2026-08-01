@@ -1,0 +1,105 @@
+# ---------------------------------------------------------------------------
+# MediaHub - production-shaped stack.
+#
+#   api       FastAPI application (non-root, health-checked)
+#   postgres  system of record
+#   redis     reserved for the future download queue / worker (see ARCHITECTURE)
+#
+# Local development overrides live in docker-compose.override.yml, which Compose
+# merges automatically. For a production-like run use:
+#   docker compose -f docker-compose.yml up -d
+# ---------------------------------------------------------------------------
+name: mediahub
+
+services:
+  api:
+    build:
+      context: .
+      target: runtime
+      args:
+        PYTHON_VERSION: "3.13"
+    image: mediahub/api:latest
+    restart: unless-stopped
+    # Longer than any drain this process performs. Compose kills after 10s by
+    # default, which is *shorter* than the worker's 30s drain grace - so the
+    # polite shutdown path would be interrupted every single deploy, and would
+    # look like nothing at all in the logs. Whichever grace is configured, this
+    # number has to be larger than it.
+    stop_grace_period: 45s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEDIAHUB_DATABASE__HOST: postgres
+      MEDIAHUB_DATABASE__PORT: "5432"
+      MEDIAHUB_RUN_MIGRATIONS: "true"
+    ports:
+      - "${MEDIAHUB_API_PORT:-8000}:8000"
+    volumes:
+      - media-library:/data/library
+      - media-staging:/data/staging
+      - media-workspace:/data/workspace
+    # Readiness, not liveness: it answers 503 when the store cannot be reached
+    # or the workspace root has gone away, which are the two states in which
+    # this instance accepts requests and completes none of them.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mediahub
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MEDIAHUB_DATABASE__USER:-mediahub}
+      POSTGRES_PASSWORD: ${MEDIAHUB_DATABASE__PASSWORD:-mediahub}
+      POSTGRES_DB: ${MEDIAHUB_DATABASE__NAME:-mediahub}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MEDIAHUB_DATABASE__USER:-mediahub} -d ${MEDIAHUB_DATABASE__NAME:-mediahub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - mediahub
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mediahub
+
+volumes:
+  postgres-data:
+  redis-data:
+  media-library:
+  media-staging:
+  # Scratch space, not a library: everything here is deleted when the work that
+  # created it reaches a terminal state, and whatever survives a crash is swept
+  # at startup. It is a named volume rather than the container filesystem so a
+  # restart can still find - and reclaim - what the previous process left.
+  media-workspace:
+
+networks:
+  mediahub:
+    driver: bridge

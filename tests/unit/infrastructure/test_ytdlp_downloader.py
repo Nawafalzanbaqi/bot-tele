@@ -1,0 +1,523 @@
+"""The yt-dlp adapter, with the engine replaced at its narrowest seam.
+
+Everything under test is the real adapter: real options, real hooks, real
+classification, real verification and real cleanup. Only ``YoutubeDL`` itself is
+a fake, so no test touches the network.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from mediahub.application.common.cancellation import CancellationSource
+from mediahub.application.download.errors import (
+    DownloadCancelledError,
+    DownloadTimeoutError,
+    LiveSourceNotAllowedError,
+    MetadataUnavailableError,
+    PlaylistNotAllowedError,
+    ProviderError,
+    SizeLimitExceededError,
+    UnsupportedProviderError,
+)
+from mediahub.application.download.ports import (
+    DownloadProgress,
+    DownloadRequest,
+    DownloadStage,
+    FormatSelection,
+)
+from mediahub.application.workspace.ports import ArtifactRole
+from mediahub.domain.media.enums import MediaType
+from mediahub.domain.sources.errors import BlockedAddressError, UnsupportedSchemeError
+from mediahub.domain.sources.policies import UrlPolicy
+from mediahub.infrastructure.download.ytdlp.downloader import YtDlpDownloader
+from mediahub.infrastructure.security.address_guard import DnsAddressGuard
+from mediahub.infrastructure.workspace.filesystem import FilesystemWorkspace
+from mediahub.shared.config.settings import DownloadSettings
+from tests.support.ytdlp_fakes import (
+    FakeYoutubeDL,
+    download_script,
+    factory_for,
+    playlist_info,
+    video_info,
+    writes,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Mapping, Sequence
+
+    from mediahub.application.workspace.ports import WorkspaceScope
+
+pytestmark = pytest.mark.unit
+
+URL = "https://example.com/watch?v=abc123"
+
+
+@pytest.fixture(autouse=True)
+def _reset_engine_registry() -> Iterator[None]:
+    FakeYoutubeDL.instances.clear()
+    yield
+    FakeYoutubeDL.instances.clear()
+
+
+@pytest.fixture
+def settings() -> DownloadSettings:
+    return DownloadSettings(
+        enabled=True,
+        probe_attempts=1,
+        progress_interval_seconds=0.0,
+        download_timeout_seconds=30.0,
+    )
+
+
+@pytest.fixture
+def workspace(tmp_path: Path) -> FilesystemWorkspace:
+    return FilesystemWorkspace(tmp_path / "workspace")
+
+
+@pytest.fixture
+def scope(workspace: FilesystemWorkspace) -> Iterator[WorkspaceScope]:
+    with workspace.lease(label="test") as leased:
+        yield leased
+
+
+def build(
+    settings: DownloadSettings,
+    *,
+    info: Mapping[str, Any] | None = None,
+    error: BaseException | None = None,
+    script: Sequence[Callable[[FakeYoutubeDL], None]] = (),
+) -> YtDlpDownloader:
+    """Build the adapter with a scripted engine and no DNS guard."""
+    return YtDlpDownloader(
+        settings,
+        url_policy=UrlPolicy(),
+        address_guard=None,
+        youtube_dl_factory=factory_for(info=info, error=error, script=script),
+    )
+
+
+class TestEngineSurface:
+    def test_reports_its_name_and_capabilities(self, settings: DownloadSettings) -> None:
+        engine = build(settings)
+
+        assert engine.name == "yt-dlp"
+        capabilities = engine.capabilities()
+        assert capabilities.engine == "yt-dlp"
+        assert capabilities.supports_probe
+        assert capabilities.supports_audio_only
+        assert capabilities.requires_external_merger, "merging needs FFmpeg, which is not ours"
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://example.com/a", True),
+            ("http://example.com/a", True),
+            ("file:///etc/passwd", False),
+            ("not a url", False),
+            ("http://127.0.0.1/a", False),
+        ],
+    )
+    def test_supports_is_a_cheap_policy_check(
+        self, settings: DownloadSettings, url: str, expected: bool
+    ) -> None:
+        assert build(settings).supports(url) is expected
+
+    def test_supports_never_builds_an_engine(self, settings: DownloadSettings) -> None:
+        build(settings).supports("https://example.com/a")
+
+        assert FakeYoutubeDL.instances == [], "supports() must not perform I/O"
+
+
+class TestProbe:
+    async def test_returns_mapped_metadata(self, settings: DownloadSettings) -> None:
+        metadata = await build(settings, info=video_info()).probe(URL)
+
+        assert metadata.provider == "testsite"
+        assert metadata.kind is MediaType.VIDEO
+        assert metadata.title == "A Test Video"
+        assert metadata.available_qualities() == ("1080p", "360p")
+        assert metadata.url == URL
+
+    async def test_does_not_download(self, settings: DownloadSettings) -> None:
+        await build(settings, info=video_info()).probe(URL)
+
+        engine = FakeYoutubeDL.instances[0]
+        assert engine.extract_calls == [(URL, False)]
+        assert engine.options["skip_download"] is True
+        assert engine.closed, "the engine must be released"
+
+    async def test_playlists_are_described_not_refused(self, settings: DownloadSettings) -> None:
+        metadata = await build(settings, info=playlist_info(7)).probe(URL)
+
+        assert metadata.is_playlist
+        assert metadata.entry_count == 7
+
+    async def test_invalid_url_is_refused_before_any_engine_is_built(
+        self, settings: DownloadSettings
+    ) -> None:
+        with pytest.raises(UnsupportedSchemeError):
+            await build(settings, info=video_info()).probe("file:///etc/passwd")
+
+        assert FakeYoutubeDL.instances == []
+
+    async def test_empty_result_is_a_typed_error(self, settings: DownloadSettings) -> None:
+        with pytest.raises(MetadataUnavailableError):
+            await build(settings, info=None).probe(URL)
+
+    async def test_engine_failure_is_classified(self, settings: DownloadSettings) -> None:
+        engine = build(settings, error=Exception("ERROR: Unsupported URL: x"))
+
+        with pytest.raises(UnsupportedProviderError):
+            await engine.probe(URL)
+
+    async def test_transient_failures_are_retried(self) -> None:
+        settings = DownloadSettings(enabled=True, probe_attempts=3, probe_backoff_seconds=0.0)
+        engine = build(settings, error=Exception("HTTP Error 503: Service Unavailable"))
+
+        with pytest.raises(ProviderError):
+            await engine.probe(URL)
+
+        assert len(FakeYoutubeDL.instances) == 3
+
+    async def test_permanent_failures_are_not_retried(self) -> None:
+        settings = DownloadSettings(enabled=True, probe_attempts=3, probe_backoff_seconds=0.0)
+        engine = build(settings, error=Exception("Video unavailable"))
+
+        with pytest.raises(MetadataUnavailableError):
+            await engine.probe(URL)
+
+        assert len(FakeYoutubeDL.instances) == 1, "a permanent failure must not be retried"
+
+
+class TestFetchHappyPath:
+    async def test_produces_a_verified_primary_artifact(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(
+            settings,
+            info=video_info(requested_downloads=[{"format_id": "18", "ext": "mp4"}]),
+            script=download_script(name="abc123.mp4", size_bytes=2048, chunks=(512, 1024)),
+        )
+
+        result = await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert result.primary.name == "abc123.mp4"
+        assert result.primary.role is ArtifactRole.PRIMARY
+        assert result.total_bytes == 2048
+        assert result.provider == "testsite"
+        assert result.selected_format.format_id == "18"
+        assert result.duration_seconds >= 0
+
+    async def test_writes_only_inside_the_lease(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script())
+
+        await engine.fetch(DownloadRequest(url=URL), scope)
+
+        options = FakeYoutubeDL.instances[0].options
+        assert options["paths"]["home"] == str(scope.directory())
+        assert options["paths"]["temp"] == str(scope.directory())
+        assert options["cachedir"] is False, "yt-dlp must not write to ~/.cache"
+
+    async def test_thumbnail_is_a_separate_artifact(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(
+            settings,
+            info=video_info(requested_downloads=[{"format_id": "18", "ext": "mp4"}]),
+            script=download_script(extras=[("abc123.jpg", 128)]),
+        )
+
+        result = await engine.fetch(DownloadRequest(url=URL, include_thumbnail=True), scope)
+
+        roles = {artifact.name: artifact.role for artifact in result.artifacts}
+        assert roles["abc123.jpg"] is ArtifactRole.THUMBNAIL
+        assert FakeYoutubeDL.instances[0].options["writethumbnail"] is True
+
+    async def test_audio_only_selection_reaches_the_engine(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(
+            settings,
+            info=video_info(requested_downloads=[{"format_id": "140", "vcodec": "none"}]),
+            script=download_script(name="abc123.m4a"),
+        )
+
+        result = await engine.fetch(
+            DownloadRequest(url=URL, selection=FormatSelection.audio_only()), scope
+        )
+
+        assert FakeYoutubeDL.instances[0].options["format"].startswith("ba")
+        assert result.selected_format.is_audio_only
+
+    async def test_specific_quality_reaches_the_engine(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script())
+
+        await engine.fetch(
+            DownloadRequest(url=URL, selection=FormatSelection.specific("137")), scope
+        )
+
+        assert FakeYoutubeDL.instances[0].options["format"].startswith("137/")
+
+    async def test_byte_ceiling_is_passed_to_the_engine(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script())
+
+        await engine.fetch(DownloadRequest(url=URL, max_bytes=5_000_000), scope)
+
+        assert FakeYoutubeDL.instances[0].options["max_filesize"] == 5_000_000
+
+
+class TestProgress:
+    async def test_reports_stages_and_bytes(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        seen: list[DownloadProgress] = []
+        engine = build(
+            settings,
+            info=video_info(),
+            script=download_script(size_bytes=2048, chunks=(512, 1024, 2048)),
+        )
+
+        await engine.fetch(DownloadRequest(url=URL), scope, on_progress=seen.append)
+
+        stages = [update.stage for update in seen]
+        assert stages[0] is DownloadStage.VALIDATING
+        assert DownloadStage.DOWNLOADING in stages
+        assert stages[-1] is DownloadStage.COMPLETED
+
+        downloading = [u for u in seen if u.stage is DownloadStage.DOWNLOADING]
+        assert downloading[-1].downloaded_bytes == 2048
+        assert downloading[-1].percentage == 100.0
+
+        # Speed and ETA come from the engine's in-flight ticks; its final
+        # "finished" payload carries neither, which is why they are optional.
+        in_flight = [u for u in downloading if u.speed_bps is not None]
+        assert in_flight, "at least one in-flight update should report speed"
+        assert in_flight[-1].speed_bps == 1024.0
+        assert in_flight[-1].eta_seconds == 3.0
+
+    async def test_progress_never_leaks_a_filesystem_path(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        seen: list[DownloadProgress] = []
+        engine = build(settings, info=video_info(), script=download_script(chunks=(1,)))
+
+        await engine.fetch(DownloadRequest(url=URL), scope, on_progress=seen.append)
+
+        names = [update.filename for update in seen if update.filename]
+        assert names, "at least one update should name the file"
+        assert all("/" not in name and "\\" not in name for name in names)
+
+    async def test_a_missing_callback_is_fine(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script(chunks=(1, 2)))
+
+        result = await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert result.total_bytes > 0
+
+
+class TestCancellation:
+    async def test_cancelled_download_raises_and_cleans_up(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        source = CancellationSource()
+
+        def cancel_midway(engine: FakeYoutubeDL) -> None:
+            engine.write_file("abc123.mp4.part", 512)
+            source.cancel()
+            engine.progress({"status": "downloading", "downloaded_bytes": 512, "total_bytes": 4096})
+
+        engine = build(settings, info=video_info(), script=[cancel_midway])
+
+        with pytest.raises(DownloadCancelledError):
+            await engine.fetch(DownloadRequest(url=URL), scope, cancellation=source.token)
+
+        assert scope.names() == (), "a cancelled attempt must leave no partial files"
+
+    async def test_cancellation_before_the_first_chunk_is_honoured(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        source = CancellationSource()
+        source.cancel()
+        engine = build(settings, info=video_info(), script=download_script())
+
+        with pytest.raises(DownloadCancelledError):
+            await engine.fetch(DownloadRequest(url=URL), scope, cancellation=source.token)
+
+    async def test_pre_existing_files_survive_a_failure(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        scope.path_for("keepme.txt").write_bytes(b"important")
+        source = CancellationSource()
+        source.cancel()
+        engine = build(settings, info=video_info(), script=download_script())
+
+        with pytest.raises(DownloadCancelledError):
+            await engine.fetch(DownloadRequest(url=URL), scope, cancellation=source.token)
+
+        assert scope.names() == ("keepme.txt",)
+
+
+class TestGuards:
+    async def test_size_ceiling_is_enforced_while_streaming(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        def overshoot(engine: FakeYoutubeDL) -> None:
+            engine.write_file("abc123.mp4.part", 10)
+            engine.progress(
+                {"status": "downloading", "downloaded_bytes": 5_000, "total_bytes": None}
+            )
+
+        engine = build(settings, info=video_info(), script=[overshoot])
+
+        with pytest.raises(SizeLimitExceededError) as excinfo:
+            await engine.fetch(DownloadRequest(url=URL, max_bytes=1_000), scope)
+
+        assert excinfo.value.limit_bytes == 1_000
+        assert excinfo.value.observed_bytes == 5_000
+        assert scope.names() == ()
+
+    async def test_timeout_produces_a_typed_error(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        def slow(engine: FakeYoutubeDL) -> None:
+            del engine
+            time.sleep(0.2)
+
+        engine = build(settings, info=video_info(), script=[slow])
+
+        with pytest.raises(DownloadTimeoutError):
+            await engine.fetch(DownloadRequest(url=URL, timeout_seconds=0.05), scope)
+
+    async def test_live_sources_are_refused_by_default(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(is_live=True), script=download_script())
+
+        with pytest.raises(LiveSourceNotAllowedError):
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert scope.names() == ()
+
+    async def test_live_sources_can_be_allowed(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(is_live=True), script=download_script())
+
+        result = await engine.fetch(DownloadRequest(url=URL, allow_live=True), scope)
+
+        assert result.total_bytes > 0
+
+    async def test_playlists_are_refused_by_default(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=playlist_info(500), script=download_script())
+
+        with pytest.raises(PlaylistNotAllowedError) as excinfo:
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert excinfo.value.entry_count == 500
+
+    async def test_playlist_expansion_is_disabled_in_options(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script())
+
+        await engine.fetch(DownloadRequest(url=URL), scope)
+
+        options = FakeYoutubeDL.instances[0].options
+        assert options["noplaylist"] is True
+        assert options["playlist_items"] == "1"
+
+
+class TestVerification:
+    async def test_a_download_that_produced_nothing_fails(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=())
+
+        with pytest.raises(MetadataUnavailableError):
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+    async def test_an_empty_file_fails_verification(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=writes("abc123.mp4", 0))
+
+        with pytest.raises(MetadataUnavailableError):
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert scope.names() == ()
+
+    async def test_only_partial_files_fails(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        engine = build(settings, info=video_info(), script=writes("abc123.mp4.part", 64))
+
+        with pytest.raises(MetadataUnavailableError):
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+    async def test_engine_failure_cleans_up_partial_output(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        def fail_after_writing(engine: FakeYoutubeDL) -> None:
+            engine.write_file("abc123.mp4.part", 128)
+            message = "HTTP Error 503: Service Unavailable"
+            raise RuntimeError(message)
+
+        engine = build(settings, info=video_info(), script=[fail_after_writing])
+
+        with pytest.raises(ProviderError):
+            await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert scope.names() == ()
+
+
+class TestAddressGuard:
+    async def test_a_host_resolving_to_loopback_is_refused(
+        self, settings: DownloadSettings
+    ) -> None:
+        policy = UrlPolicy()
+        guard = DnsAddressGuard(policy, resolver=lambda host, port: ["127.0.0.1"])
+        engine = YtDlpDownloader(
+            settings,
+            url_policy=policy,
+            address_guard=guard,
+            youtube_dl_factory=factory_for(info=video_info()),
+        )
+
+        with pytest.raises(BlockedAddressError):
+            await engine.probe("https://sneaky.example.com/a")
+
+        assert FakeYoutubeDL.instances == []
+
+
+class TestConcurrency:
+    async def test_two_downloads_do_not_share_a_lease(
+        self, settings: DownloadSettings, workspace: FilesystemWorkspace
+    ) -> None:
+        engine = build(settings, info=video_info(), script=download_script())
+
+        async def run() -> int:
+            with workspace.lease(label="job") as leased:
+                result = await engine.fetch(DownloadRequest(url=URL), leased)
+                return result.total_bytes
+
+        first, second = await asyncio.gather(run(), run())
+
+        assert first == second > 0
+        homes = {engine.options["paths"]["home"] for engine in FakeYoutubeDL.instances}
+        assert len(homes) == 2, "each download must get its own directory"
