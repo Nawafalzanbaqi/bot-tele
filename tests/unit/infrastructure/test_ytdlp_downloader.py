@@ -16,6 +16,7 @@ import pytest
 
 from mediahub.application.common.cancellation import CancellationSource
 from mediahub.application.download.errors import (
+    ConnectionBlockedError,
     DownloadCancelledError,
     DownloadTimeoutError,
     LiveSourceNotAllowedError,
@@ -521,3 +522,115 @@ class TestConcurrency:
         assert first == second > 0
         homes = {engine.options["paths"]["home"] for engine in FakeYoutubeDL.instances}
         assert len(homes) == 2, "each download must get its own directory"
+
+
+class TestEgressIsUsedOnlyWhereItIsNeeded:
+    """A tunnel is slower and usually metered; most sources do not need one.
+
+    So nothing is routed through it by default. A host earns the egress by
+    proving it needs one - a connection that opened and was reset - and is then
+    remembered, so the cost of learning is a single fast failure paid once.
+    """
+
+    @staticmethod
+    def _settings(**overrides: object) -> DownloadSettings:
+        base: dict[str, object] = {
+            "enabled": True,
+            "probe_attempts": 1,
+            "progress_interval_seconds": 0.0,
+            "proxy": "http://vpn:8888",
+        }
+        base.update(overrides)
+        return DownloadSettings(**base)  # type: ignore[arg-type]
+
+    async def test_an_ordinary_source_is_fetched_directly(self) -> None:
+        downloader = build(self._settings(), info=video_info())
+
+        await downloader.probe(URL)
+
+        assert (
+            FakeYoutubeDL.instances[0].options.get("proxy") is None
+        ), "a source that works must not be sent down the tunnel"
+
+    async def test_a_listed_host_goes_through_the_egress_immediately(self) -> None:
+        """No wasted first attempt for a host already known to need it."""
+        downloader = build(self._settings(proxy_hosts=("example.com",)), info=video_info())
+
+        await downloader.probe(URL)
+
+        assert FakeYoutubeDL.instances[0].options.get("proxy") == "http://vpn:8888"
+        assert len(FakeYoutubeDL.instances) == 1, "it must not try direct first"
+
+    async def test_a_subdomain_of_a_listed_host_is_covered(self) -> None:
+        downloader = build(self._settings(proxy_hosts=("example.com",)), info=video_info())
+
+        await downloader.probe("https://cdn.example.com/watch?v=abc123")
+
+        assert FakeYoutubeDL.instances[0].options.get("proxy") == "http://vpn:8888"
+
+    async def test_a_reset_connection_is_retried_through_the_egress(self) -> None:
+        """The whole point: the engine discovers what needs routing."""
+        reset = OSError("Unable to download webpage: [Errno 104] Connection reset by peer")
+        attempts: list[Mapping[str, Any]] = []
+
+        def factory(options: Mapping[str, Any]) -> FakeYoutubeDL:
+            attempts.append(options)
+            failing = options.get("proxy") is None
+            return FakeYoutubeDL(
+                options, info=None if failing else video_info(), error=reset if failing else None
+            )
+
+        downloader = YtDlpDownloader(
+            self._settings(),
+            url_policy=UrlPolicy(),
+            address_guard=None,
+            youtube_dl_factory=factory,
+        )
+
+        metadata = await downloader.probe(URL)
+
+        assert metadata.title == "A Test Video"
+        assert [options.get("proxy") for options in attempts] == [None, "http://vpn:8888"]
+
+    async def test_the_lesson_is_remembered_for_the_next_request(self) -> None:
+        """Learning must cost one failure, not one per download."""
+        reset = OSError("[Errno 104] Connection reset by peer")
+        attempts: list[Mapping[str, Any]] = []
+
+        def factory(options: Mapping[str, Any]) -> FakeYoutubeDL:
+            attempts.append(options)
+            failing = options.get("proxy") is None
+            return FakeYoutubeDL(
+                options, info=None if failing else video_info(), error=reset if failing else None
+            )
+
+        downloader = YtDlpDownloader(
+            self._settings(),
+            url_policy=UrlPolicy(),
+            address_guard=None,
+            youtube_dl_factory=factory,
+        )
+        await downloader.probe(URL)
+        attempts.clear()
+
+        await downloader.probe(URL)
+
+        assert [options.get("proxy") for options in attempts] == ["http://vpn:8888"]
+
+    async def test_an_ordinary_failure_is_not_retried_through_the_egress(self) -> None:
+        """A private video fails identically through a tunnel; do not pay twice."""
+        downloader = build(self._settings(), error=RuntimeError("This video is private"))
+
+        with pytest.raises(MetadataUnavailableError):
+            await downloader.probe(URL)
+
+        assert len(FakeYoutubeDL.instances) == 1
+
+    async def test_without_an_egress_a_reset_is_simply_reported(self) -> None:
+        downloader = build(
+            DownloadSettings(enabled=True, probe_attempts=1),
+            error=OSError("[Errno 104] Connection reset by peer"),
+        )
+
+        with pytest.raises(ConnectionBlockedError):
+            await downloader.probe(URL)

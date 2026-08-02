@@ -38,6 +38,7 @@ from loguru import logger
 
 from mediahub.application.common.cancellation import CancellationReason
 from mediahub.application.download.errors import (
+    ConnectionBlockedError,
     DownloadCancelledError,
     DownloadError,
     DownloadTimeoutError,
@@ -68,7 +69,7 @@ from mediahub.infrastructure.download.ytdlp.progress import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from mediahub.application.common.cancellation import CancellationToken
     from mediahub.application.download.ports import (
@@ -99,6 +100,78 @@ _IMAGE_EXTENSIONS: Final[frozenset[str]] = frozenset(
 )
 _SUBTITLE_EXTENSIONS: Final[frozenset[str]] = frozenset({".vtt", ".srt", ".ass", ".ssa"})
 _PARTIAL_SUFFIXES: Final[tuple[str, ...]] = (".part", ".ytdl", ".temp")
+
+
+class ProxyPolicy:
+    """Decides which hosts are fetched through the egress proxy.
+
+    **Nothing goes through it by default.** A tunnel is slower than the direct
+    path and usually metered, and almost every source is reachable without one;
+    routing everything through it would make every download worse in order to
+    fix a few. So the proxy is used for a host only when that host has given a
+    reason.
+
+    The reason is specific and self-evident: a connection that opened and was
+    then reset before any data came back
+    (:class:`~mediahub.application.download.errors.ConnectionBlockedError`).
+    That is a path failure rather than a source failure, and it is the one thing
+    a different egress can cure. When it happens the host is remembered, so the
+    cost of learning is a single fast failure, paid once.
+
+    Memory is per-process and deliberately not persisted. What a network blocks
+    changes, and a stale list would keep sending traffic down a slow tunnel long
+    after the direct route started working again. A restart re-learns in one
+    attempt. ``proxy_hosts`` exists for the operator who would rather not pay
+    even that.
+    """
+
+    __slots__ = ("_learned", "_listed", "_lock", "_proxy")
+
+    def __init__(self, proxy: str | None, hosts: Sequence[str] = ()) -> None:
+        """Bind the policy to an egress and the hosts known to need it."""
+        self._proxy = proxy or None
+        self._listed = frozenset(host.lower().lstrip(".") for host in hosts if host)
+        self._learned: set[str] = set()
+        # Probes and fetches run on engine threads; the set is written from
+        # whichever one first meets a reset.
+        self._lock = threading.Lock()
+
+    @property
+    def is_configured(self) -> bool:
+        """Return whether an egress exists to fall back to."""
+        return self._proxy is not None
+
+    def for_host(self, host: str) -> str | None:
+        """Return the egress this host should use, or ``None`` for direct."""
+        if self._proxy is None:
+            return None
+        lowered = host.lower()
+        with self._lock:
+            known = self._listed | self._learned
+        matched = any(lowered == name or lowered.endswith(f".{name}") for name in known)
+        return self._proxy if matched else None
+
+    def escalate(self, host: str) -> str | None:
+        """Remember that ``host`` needs the egress, and return it.
+
+        Returns ``None`` when there is nothing to escalate to, or when this host
+        was already being routed - in which case the proxy is not the answer and
+        the original failure is the honest one.
+        """
+        if self._proxy is None or self.for_host(host) is not None:
+            return None
+        with self._lock:
+            self._learned.add(host.lower())
+        logger.bind(host=host).info(
+            "Direct connection to this host was reset; routing it through the egress proxy"
+        )
+        return self._proxy
+
+    @property
+    def learned_hosts(self) -> tuple[str, ...]:
+        """Return the hosts discovered to need the egress. Diagnostic helper."""
+        with self._lock:
+            return tuple(sorted(self._learned))
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +294,7 @@ def default_youtube_dl_factory(options: Mapping[str, Any]) -> YoutubeDLLike:
 class YtDlpDownloader:
     """Downloads media with yt-dlp, behind the engine-neutral port."""
 
-    __slots__ = ("_address_guard", "_factory", "_settings", "_url_policy")
+    __slots__ = ("_address_guard", "_factory", "_proxy_policy", "_settings", "_url_policy")
 
     def __init__(
         self,
@@ -230,6 +303,7 @@ class YtDlpDownloader:
         url_policy: UrlPolicy | None = None,
         address_guard: DnsAddressGuard | None = None,
         youtube_dl_factory: YoutubeDLFactory | None = None,
+        proxy_policy: ProxyPolicy | None = None,
     ) -> None:
         """Wire the engine to its configuration and its guards.
 
@@ -241,11 +315,14 @@ class YtDlpDownloader:
                 syntactic half always runs.
             youtube_dl_factory: Builds the engine object. Tests inject a fake,
                 which is what keeps the unit suite free of network access.
+            proxy_policy: Decides which hosts are fetched through the egress.
+                Built from ``settings`` when omitted.
         """
         self._settings = settings
         self._url_policy = url_policy or UrlPolicy()
         self._address_guard = address_guard
         self._factory = youtube_dl_factory or default_youtube_dl_factory
+        self._proxy_policy = proxy_policy or ProxyPolicy(settings.proxy, settings.proxy_hosts)
 
     # -- Port surface --------------------------------------------------------
 
@@ -330,12 +407,16 @@ class YtDlpDownloader:
 
         try:
             bridge.stage(DownloadStage.SELECTING)
-            info = await self._run_guarded(
-                lambda: self._blocking_fetch(request, validated, workspace, bridge),
-                timeout_seconds=budget,
-                cancellation=cancellation,
-                url=validated.value,
-            )
+
+            async def run(proxy: str | None) -> Mapping[str, Any]:
+                return await self._run_guarded(
+                    lambda: self._blocking_fetch(request, validated, workspace, bridge, proxy),
+                    timeout_seconds=budget,
+                    cancellation=cancellation,
+                    url=validated.value,
+                )
+
+            info = await self._with_egress_fallback(run, host=validated.host)
             bridge.stage(DownloadStage.VERIFYING)
             result = self._build_result(
                 request=request,
@@ -373,18 +454,52 @@ class YtDlpDownloader:
             self._address_guard.check(validated)
         return validated
 
+    async def _with_egress_fallback(
+        self,
+        run: Callable[[str | None], Awaitable[Mapping[str, Any]]],
+        *,
+        host: str,
+    ) -> Mapping[str, Any]:
+        """Run an engine call, retrying through the egress if the path is cut.
+
+        The retry is deliberately narrow. Only
+        :class:`~mediahub.application.download.errors.ConnectionBlockedError`
+        triggers it, because only that failure means "the connection opened and
+        something in the path closed it" - which is the one thing a different
+        egress can cure. A 404, a private video or an expired session would fail
+        identically through a tunnel, and retrying them there would double the
+        time to report a failure that was already final.
+
+        At most one escalation: if the host was already being routed, the proxy
+        is not the answer and the first error is the honest one.
+        """
+        proxy = self._proxy_policy.for_host(host)
+        try:
+            return await run(proxy)
+        except ConnectionBlockedError:
+            escalated = self._proxy_policy.escalate(host)
+            if escalated is None:
+                raise
+        return await run(escalated)
+
     # -- Probing -------------------------------------------------------------
 
     async def _probe_once(
         self, validated: ValidatedUrl, *, timeout_seconds: float
     ) -> MediaMetadata:
-        """Perform one probe attempt."""
-        info = await self._run_guarded(
-            lambda: self._blocking_probe(validated, timeout_seconds=timeout_seconds),
-            timeout_seconds=timeout_seconds,
-            cancellation=None,
-            url=validated.value,
-        )
+        """Perform one probe attempt, escalating to the egress if cut off."""
+
+        async def run(proxy: str | None) -> Mapping[str, Any]:
+            return await self._run_guarded(
+                lambda: self._blocking_probe(
+                    validated, timeout_seconds=timeout_seconds, proxy=proxy
+                ),
+                timeout_seconds=timeout_seconds,
+                cancellation=None,
+                url=validated.value,
+            )
+
+        info = await self._with_egress_fallback(run, host=validated.host)
         metadata = to_metadata(info, url=validated.value, probed_at=datetime.now(UTC))
         logger.bind(
             provider=metadata.provider,
@@ -396,13 +511,14 @@ class YtDlpDownloader:
         return metadata
 
     def _blocking_probe(
-        self, validated: ValidatedUrl, *, timeout_seconds: float
+        self, validated: ValidatedUrl, *, timeout_seconds: float, proxy: str | None = None
     ) -> Mapping[str, Any]:
         """Extract metadata synchronously. Runs in a worker thread."""
         options = build_probe_options(
             self._settings,
             allow_playlist=True,
             socket_timeout_seconds=min(timeout_seconds, self._settings.socket_timeout_seconds),
+            proxy=proxy,
         )
         engine = self._factory(options)
         try:
@@ -426,6 +542,7 @@ class YtDlpDownloader:
         validated: ValidatedUrl,
         workspace: WorkspaceScope,
         bridge: ProgressBridge,
+        proxy: str | None = None,
     ) -> Mapping[str, Any]:
         """Download synchronously. Runs in a worker thread."""
         options = build_download_options(
@@ -435,6 +552,7 @@ class YtDlpDownloader:
             format_expression=build_format_expression(request.selection),
             progress_hook=bridge.on_download_hook,
             postprocessor_hook=bridge.on_postprocessor_hook,
+            proxy=proxy,
         )
         engine = self._factory(options)
         try:

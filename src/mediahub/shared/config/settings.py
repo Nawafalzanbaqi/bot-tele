@@ -29,7 +29,14 @@ from pathlib import Path
 from typing import Annotated, Final
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INSECURE_DEFAULTS: Final[frozenset[str]] = frozenset(
@@ -312,6 +319,20 @@ class DownloadSettings(_ConfigSection):
             the hostname. No cookie, retry or engine update changes that,
             because the traffic never reaches the site. Sending it through a
             proxy on the far side of the filter is what changes it.
+        proxy_hosts: Hosts to send through ``proxy`` from the first attempt.
+            Comma-separated, and matching covers subdomains.
+
+            **Empty is a working configuration, not an unfinished one.** With no
+            list, everything is fetched directly and the proxy is used only for
+            a host that has actually proved it needs one - a connection that
+            opened and was reset. That host is then remembered for the life of
+            the process. Listing a host here only skips the one fast failure
+            that teaches the same lesson.
+
+            The default of routing nothing is deliberate. A tunnel is slower
+            than the direct path and is usually metered, and most sources do not
+            need it; sending everything through one would make every download
+            worse to fix a few.
     """
 
     enabled: bool = False
@@ -332,6 +353,20 @@ class DownloadSettings(_ConfigSection):
     user_agent: str | None = None
     cookies_file: Path | None = None
     proxy: str | None = None
+    proxy_hosts: tuple[str, ...] = ()
+
+    @field_validator("proxy_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: object) -> object:
+        """Accept a comma-separated list, not only JSON.
+
+        This one is edited by hand in a ``.env`` file more often than any other
+        setting here, and ``["a.com","b.com"]`` is an unkind thing to ask
+        someone to type correctly at a shell prompt.
+        """
+        if isinstance(value, str):
+            return [part.strip().lower().lstrip(".") for part in value.split(",") if part.strip()]
+        return value
 
 
 class WorkerSettings(_ConfigSection):

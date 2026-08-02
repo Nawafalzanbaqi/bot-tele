@@ -27,11 +27,19 @@ title is preserved in metadata where it cannot become a path.
 """
 
 
-def base_options(settings: DownloadSettings) -> dict[str, Any]:
+def base_options(settings: DownloadSettings, *, proxy: str | None = None) -> dict[str, Any]:
     """Return options shared by probing and downloading.
 
     Every entry marked *security* is load-bearing; changing one changes what the
     engine is allowed to do to the device.
+
+    Args:
+        settings: Engine configuration.
+        proxy: Egress to route this request through, or ``None`` for the direct
+            path. Passed per call rather than read from ``settings`` because
+            **which** requests need an egress is a decision, and it is not this
+            module's: see
+            :class:`~mediahub.infrastructure.download.ytdlp.downloader.ProxyPolicy`.
     """
     options: dict[str, Any] = {
         # Quiet: MediaHub owns its own logging and progress reporting.
@@ -73,8 +81,8 @@ def base_options(settings: DownloadSettings) -> dict[str, Any]:
         # that hides media from an anonymous session hides it at *probe* time,
         # which is where the failure is reported as "no video in this post".
         options["cookiefile"] = str(settings.cookies_file)
-    if settings.proxy:
-        options["proxy"] = settings.proxy
+    if proxy:
+        options["proxy"] = proxy
     return options
 
 
@@ -83,6 +91,7 @@ def build_probe_options(
     *,
     allow_playlist: bool = False,
     socket_timeout_seconds: float | None = None,
+    proxy: str | None = None,
 ) -> dict[str, Any]:
     """Return options for a metadata-only extraction.
 
@@ -90,7 +99,7 @@ def build_probe_options(
     counted without resolving every entry, so probing a channel costs one
     request rather than five hundred.
     """
-    options = base_options(settings)
+    options = base_options(settings, proxy=proxy)
     options.update(
         {
             "skip_download": True,
@@ -112,6 +121,7 @@ def build_download_options(
     format_expression: str,
     progress_hook: Callable[[Mapping[str, Any]], None],
     postprocessor_hook: Callable[[Mapping[str, Any]], None],
+    proxy: str | None = None,
 ) -> dict[str, Any]:
     """Return options for an actual download into ``directory``.
 
@@ -125,8 +135,9 @@ def build_download_options(
         format_expression: Result of the format-selection translation.
         progress_hook: Receives yt-dlp download hook payloads.
         postprocessor_hook: Receives yt-dlp post-processor hook payloads.
+        proxy: Egress to route this download through, or ``None`` for direct.
     """
-    options = base_options(settings)
+    options = base_options(settings, proxy=proxy)
     options.update(
         {
             # security: confine every write, including temporary part-files.
