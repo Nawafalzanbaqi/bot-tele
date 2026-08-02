@@ -451,7 +451,7 @@ class TelegramSettings(_ConfigSection):
     max_concurrent_acquisitions: int = Field(default=1, ge=1, le=8)
     poll_timeout_seconds: int = Field(default=30, ge=1, le=120)
     progress_interval_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
-    history_limit: int = Field(default=10, ge=1, le=50)
+    history_limit: int = Field(default=25, ge=1, le=50)
     session_ttl_seconds: float = Field(default=900.0, ge=30.0)
 
     @property
