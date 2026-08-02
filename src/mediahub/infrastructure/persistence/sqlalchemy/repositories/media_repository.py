@@ -34,8 +34,15 @@ class SqlAlchemyMediaRepository:
         self._session = session
 
     async def add(self, media: MediaItem) -> None:
-        """Stage a newly registered item for insertion."""
+        """Insert a newly registered item, within the caller's transaction.
+
+        Flushed rather than merely staged, so that inserts happen in the order
+        the caller made them. See
+        :meth:`~mediahub.infrastructure.persistence.sqlalchemy.repositories.download_job_repository.SqlAlchemyDownloadJobRepository.add`
+        for why the default order is not the safe one.
+        """
         self._session.add(media_to_model(media))
+        await self._session.flush()
 
     async def save(self, media: MediaItem) -> None:
         """Stage the current state of an already-known item.

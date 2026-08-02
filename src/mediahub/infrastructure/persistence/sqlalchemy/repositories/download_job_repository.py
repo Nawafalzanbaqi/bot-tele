@@ -41,8 +41,22 @@ class SqlAlchemyDownloadJobRepository:
         self._session = session
 
     async def add(self, job: DownloadJob) -> None:
-        """Stage a newly requested job for insertion."""
+        """Insert a newly requested job, within the caller's transaction.
+
+        Flushed rather than merely staged. Without a ``relationship`` between
+        the models - which this schema deliberately does not have - SQLAlchemy
+        has no dependency to order a flush by, and it emits the two inserts in
+        mapper order: ``download_jobs`` before ``media_items``. A caller that
+        catalogues an item and queues work for it in one transaction would then
+        fail on a foreign key that is perfectly satisfied, because the row it
+        points at is one statement away from existing.
+
+        Flushing here makes the order the caller's, which is the order that is
+        actually correct. Nothing is committed - a later exception still rolls
+        the whole unit of work back.
+        """
         self._session.add(job_to_model(job))
+        await self._session.flush()
 
     async def save(self, job: DownloadJob) -> None:
         """Stage the current state of an already-known job."""

@@ -2,9 +2,10 @@
 
 Two things make this file worth reading once:
 
-* **The URL comes from application settings**, never from ``alembic.ini``. One
-  source of truth means migrations cannot be applied to a different database
-  than the one the app is about to use.
+* **The URL comes from application settings**, never from ``alembic.ini``, and
+  it follows the configured backend rather than assuming PostgreSQL. One source
+  of truth means migrations cannot be applied to a different database than the
+  one the app is about to use - which on the appliance is a file.
 * **Every model module is imported** before ``target_metadata`` is read.
   Autogenerate diffs the metadata registry against the live schema; a model
   that was never imported looks like a table that should be dropped.
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 config = context.config
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", get_settings().database.dsn)
+config.set_main_option("sqlalchemy.url", get_settings().database.migration_url)
 
 
 def run_migrations_offline() -> None:

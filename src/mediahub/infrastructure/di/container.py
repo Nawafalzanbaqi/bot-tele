@@ -84,6 +84,7 @@ from mediahub.infrastructure.persistence.sqlalchemy.unit_of_work import (
 )
 from mediahub.infrastructure.persistence.sqlite.engine import SqliteDatabase
 from mediahub.infrastructure.persistence.sqlite.journal import SqliteAcquisitionJournal
+from mediahub.infrastructure.persistence.sqlite.queue import SqliteJobQueue
 from mediahub.infrastructure.security.address_guard import DnsAddressGuard
 from mediahub.infrastructure.security.audit_sink import LoggingAuditSink
 from mediahub.infrastructure.system.clock import SystemClock
@@ -503,6 +504,10 @@ def build_container(settings: Settings) -> Container:
         # History outlives the process here, which on a device that loses power
         # is the normal case rather than the exceptional one.
         journal = SqliteAcquisitionJournal(sqlite.session_factory)
+        # So does the queue. A job claimed when the power went is reclaimed when
+        # the lease lapses and resumed from its last checkpoint, instead of
+        # being lost with the process that was running it.
+        job_queue = SqliteJobQueue(sqlite.session_factory)
     elif settings.database.backend is PersistenceBackend.POSTGRES:
         database = Database(settings.database)
         unit_of_work = SqlAlchemyUnitOfWorkFactory(database.session_factory)

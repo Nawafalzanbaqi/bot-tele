@@ -156,6 +156,31 @@ class DatabaseSettings(_ConfigSection):
         """Return the connection URL with the password masked, for logs."""
         return f"postgresql+asyncpg://{self.user}:***@{self.host}:{self.port}/{self.name}"
 
+    @property
+    def sqlite_url(self) -> str:
+        """Return the async SQLAlchemy URL for :attr:`sqlite_path`."""
+        return f"sqlite+aiosqlite:///{self.sqlite_path}"
+
+    @property
+    def migration_url(self) -> str:
+        """Return the URL Alembic should connect to, for the chosen backend.
+
+        Migrations must reach the database the application is about to use.
+        Reading :attr:`dsn` unconditionally would point every ``alembic
+        upgrade`` at PostgreSQL - including on the appliance, where the system
+        of record is a file and the upgrade would silently apply somewhere else
+        or refuse to connect at all.
+
+        Raises:
+            ValueError: If the backend keeps nothing to migrate.
+        """
+        if self.backend is PersistenceBackend.SQLITE:
+            return self.sqlite_url
+        if self.backend is PersistenceBackend.POSTGRES:
+            return self.dsn
+        message = f"the '{self.backend.value}' backend has no schema to migrate"
+        raise ValueError(message)
+
 
 class WorkspaceSettings(_ConfigSection):
     """Ephemeral scratch space used while a job is in flight.

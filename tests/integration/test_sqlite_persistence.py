@@ -20,14 +20,18 @@ from sqlalchemy import delete, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from mediahub.application.download.journal import JournalEntry
+from mediahub.domain.download.enums import JobPriority
 from mediahub.infrastructure.persistence.sqlalchemy.models import (
     DownloadJobModel,
+    JobQueueModel,
     JournalEntryModel,
     MediaItemModel,
 )
+from mediahub.infrastructure.persistence.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWorkFactory
 from mediahub.infrastructure.persistence.sqlite.engine import SqliteDatabase
 from mediahub.infrastructure.persistence.sqlite.journal import SqliteAcquisitionJournal
 from mediahub.shared.config.settings import DatabaseSettings, PersistenceBackend
+from tests.support.worker_fakes import queued_job
 
 pytestmark = pytest.mark.integration
 
@@ -306,3 +310,51 @@ async def test_the_journal_table_is_created_by_the_schema(database: SqliteDataba
         tables = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
 
     assert JournalEntryModel.__tablename__ in tables
+
+
+async def test_the_job_queue_table_is_created_by_the_schema(database: SqliteDatabase) -> None:
+    async with database.engine.connect() as connection:
+        tables = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
+
+    assert JobQueueModel.__tablename__ in tables
+
+
+async def test_an_item_and_its_job_can_be_written_in_one_transaction(
+    database: SqliteDatabase,
+) -> None:
+    """Foreign keys are enforced here, so insert order is not a free choice.
+
+    Without a ``relationship`` to sort by, SQLAlchemy emits the two inserts in
+    mapper order - ``download_jobs`` first - and this fails on a constraint that
+    is perfectly satisfied. The repositories flush so that the order is the
+    caller's instead. Registering an item and queueing work for it together is
+    exactly what a single-screen web submission would do.
+    """
+    item, job = queued_job(4242, priority=JobPriority.NORMAL, now=datetime.now(UTC))
+    unit_of_work = SqlAlchemyUnitOfWorkFactory(database.session_factory)
+
+    async with unit_of_work() as uow:
+        await uow.media.add(item)
+        await uow.download_jobs.add(job)
+        await uow.commit()
+
+    async with unit_of_work() as uow:
+        assert await uow.download_jobs.get(job.id) is not None
+        assert await uow.media.get(item.id) is not None
+
+
+async def test_a_rolled_back_unit_of_work_leaves_nothing_behind(
+    database: SqliteDatabase,
+) -> None:
+    """Flushing early must not mean committing early."""
+    item, job = queued_job(4343, priority=JobPriority.NORMAL, now=datetime.now(UTC))
+    unit_of_work = SqlAlchemyUnitOfWorkFactory(database.session_factory)
+
+    async with unit_of_work() as uow:
+        await uow.media.add(item)
+        await uow.download_jobs.add(job)
+        # Left without a commit: `__aexit__` rolls back.
+
+    async with unit_of_work() as uow:
+        assert await uow.download_jobs.get(job.id) is None
+        assert await uow.media.get(item.id) is None

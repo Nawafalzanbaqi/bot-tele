@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from mediahub.application.download.queue import JobStage, WorkerId
@@ -32,9 +32,14 @@ from mediahub.application.download.use_cases.report_job_progress import ReportJo
 from mediahub.domain.download.entities import DownloadJob
 from mediahub.domain.download.enums import JobPriority
 from mediahub.domain.download.value_objects import JobId, RetryPolicy
-from mediahub.domain.media.value_objects import MediaId, SourceUrl
+from mediahub.domain.media.entities import MediaItem
+from mediahub.domain.media.enums import MediaType
+from mediahub.domain.media.value_objects import MediaId, MediaTitle, SourceUrl
 from mediahub.infrastructure.persistence.memory.factory import InMemoryUnitOfWorkFactory
 from mediahub.infrastructure.persistence.memory.queue import InMemoryJobQueue
+from mediahub.infrastructure.persistence.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWorkFactory
+from mediahub.infrastructure.persistence.sqlite.engine import SqliteDatabase
+from mediahub.infrastructure.persistence.sqlite.queue import SqliteJobQueue
 from mediahub.infrastructure.workspace.filesystem import FilesystemWorkspace
 from mediahub.presentation.worker.config import WorkerTimings
 from mediahub.presentation.worker.executor import StageExecutor
@@ -46,12 +51,15 @@ from mediahub.presentation.worker.stages.base import (
     StageOutcome,
     StageRegistry,
 )
+from mediahub.shared.config.settings import DatabaseSettings
 from tests.conftest import FrozenClock, RecordingEventPublisher
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from datetime import datetime
     from pathlib import Path
 
+    from mediahub.application.download.queue import JobQueue
     from mediahub.presentation.worker.stages.base import StageContext, StageHandler
 
 WORKER = WorkerId(host="pi", role="worker", index=0)
@@ -106,6 +114,42 @@ class RecordingStageHandler:
 def handlers_for(stages: Sequence[JobStage] = DEFAULT_STAGE_PLAN) -> list[RecordingStageHandler]:
     """Return one recording handler per stage, in plan order."""
     return [RecordingStageHandler(stage=stage) for stage in stages]
+
+
+def queued_job(
+    number: int,
+    *,
+    priority: JobPriority,
+    now: datetime,
+    max_attempts: int = 3,
+    backoff_seconds: int = 30,
+) -> tuple[MediaItem, DownloadJob]:
+    """Build one catalogued item and the queued job for it.
+
+    One definition shared by every harness, so that a queue tested against the
+    in-memory adapter and the same queue tested against SQLite are ordered by
+    the same priority, created at the same instant and identified the same way.
+    Two harnesses building "a queued job" slightly differently is how a contract
+    suite ends up proving less than it appears to.
+    """
+    media_id = MediaId(UUID(int=number + 1000))
+    url = SourceUrl(f"https://example.com/{number}.mp4")
+    item = MediaItem.register(
+        media_id=media_id,
+        source_url=url,
+        title=MediaTitle(f"clip {number}"),
+        media_type=MediaType.VIDEO,
+        now=now,
+    )
+    job = DownloadJob.request(
+        job_id=JobId(UUID(int=number)),
+        media_id=media_id,
+        source_url=url,
+        priority=priority,
+        retry_policy=RetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_seconds),
+        now=now,
+    )
+    return item, job
 
 
 @dataclass
@@ -251,19 +295,17 @@ class WorkerHarness:
     ) -> JobId:
         """Create a queued job through the domain, as a real request would."""
         self.next_id += 1
-        job_id = JobId(UUID(int=self.next_id))
-        job = DownloadJob.request(
-            job_id=job_id,
-            media_id=MediaId(UUID(int=self.next_id + 1000)),
-            source_url=SourceUrl(f"https://example.com/{self.next_id}.mp4"),
+        _, job = queued_job(
+            self.next_id,
             priority=priority,
-            retry_policy=RetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_seconds),
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds,
             now=self.clock.now(),
         )
         async with self.unit_of_work() as uow:
             await uow.download_jobs.add(job)
             await uow.commit()
-        return job_id
+        return job.id
 
     async def job(self, job_id: JobId) -> DownloadJob:
         """Return the stored job. Fails loudly if it is missing."""
@@ -286,3 +328,86 @@ class WorkerHarness:
         if not root.is_dir():
             return []
         return sorted(entry.name for entry in root.iterdir() if entry.is_dir())
+
+
+@dataclass
+class SqliteQueueHarness:
+    """The queue, backed by a real database file rather than a dictionary.
+
+    Deliberately narrower than :class:`WorkerHarness`: it offers a clock, a
+    queue and a way to enqueue, which is everything the queue contract asks of a
+    harness and nothing more. Anything a worker needs beyond that is not part of
+    what a queue promises.
+
+    The item and the job are committed in **separate transactions**, which is
+    what the application does - ``RegisterMedia`` catalogues an item and
+    ``RequestDownload`` later queues work for it. Writing both in one would
+    exercise a path production does not have.
+    """
+
+    clock: FrozenClock
+    database: SqliteDatabase
+    unit_of_work: SqlAlchemyUnitOfWorkFactory
+    queue: SqliteJobQueue
+    next_id: int = 100
+
+    @classmethod
+    async def build(cls, tmp_path: Path) -> SqliteQueueHarness:
+        """Create the schema on a fresh file and wire the queue to it."""
+        database = SqliteDatabase(DatabaseSettings(sqlite_path=tmp_path / "queue.db"))
+        await database.create_schema()
+        return cls(
+            clock=FrozenClock(),
+            database=database,
+            unit_of_work=SqlAlchemyUnitOfWorkFactory(database.session_factory),
+            queue=SqliteJobQueue(database.session_factory),
+        )
+
+    async def enqueue(
+        self,
+        *,
+        priority: JobPriority = JobPriority.NORMAL,
+        max_attempts: int = 3,
+        backoff_seconds: int = 30,
+    ) -> JobId:
+        """Catalogue an item, then queue a job for it."""
+        self.next_id += 1
+        item, job = queued_job(
+            self.next_id,
+            priority=priority,
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds,
+            now=self.clock.now(),
+        )
+        async with self.unit_of_work() as uow:
+            await uow.media.add(item)
+            await uow.commit()
+        async with self.unit_of_work() as uow:
+            await uow.download_jobs.add(job)
+            await uow.commit()
+        return job.id
+
+    async def aclose(self) -> None:
+        """Close every pooled connection so the file can be removed."""
+        await self.database.dispose()
+
+
+class QueueHarness(Protocol):
+    """What the queue contract suite needs, whatever backs the queue."""
+
+    clock: FrozenClock
+
+    @property
+    def queue(self) -> JobQueue:
+        """Return the queue under test."""
+        ...
+
+    async def enqueue(
+        self,
+        *,
+        priority: JobPriority = ...,
+        max_attempts: int = ...,
+        backoff_seconds: int = ...,
+    ) -> JobId:
+        """Create a queued job."""
+        ...

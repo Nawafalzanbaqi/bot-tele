@@ -30,6 +30,8 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -127,6 +129,77 @@ class DownloadJobModel(Base):
             postgresql_where=text("status IN ('queued', 'running')"),
             sqlite_where=text("status IN ('queued', 'running')"),
         ),
+    )
+
+
+class JobQueueModel(Base):
+    """Row shape of the scheduling mechanics of one job.
+
+    Deliberately a **separate table from ``download_jobs``**, keyed one-to-one
+    by job id. The aggregate owns the business fields and is written through a
+    unit of work; these are lease, checkpoint and cancellation, written by
+    single conditional statements that must not be caught up in a caller's
+    transaction (``docs/architecture/09-queue-architecture.md`` §9.3).
+
+    The row is also **optional**. A job with no row here has never been claimed,
+    which reads as "claimable, nothing completed" - so requesting a download
+    writes one table, not two, and the queue can never fall out of step with the
+    catalogue.
+    """
+
+    __tablename__ = "job_queue"
+
+    job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("download_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    # -- Lease ---------------------------------------------------------------
+    # Stored as the canonical `host:role:index` string rather than three
+    # columns: ownership is only ever compared for equality, and one column
+    # makes the conditional UPDATE that guards every write a single predicate.
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_acquired_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # -- Checkpoint ----------------------------------------------------------
+    # Comma-separated stage values. Stage names are lowercase identifiers with
+    # no commas in them, so this stays greppable from the sqlite3 shell during
+    # triage - which on a headless device is the tool that is actually present.
+    completed_stages: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resume_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkpoint_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # -- Scheduling ----------------------------------------------------------
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    available_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # -- Last observation ----------------------------------------------------
+    # Telemetry, overwritten in place. Losing an update costs nothing, which is
+    # why it is one row per job rather than an append-only history that would
+    # grow without bound on a 32 GB card.
+    progress_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    progress_transferred_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    progress_total_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    progress_speed_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    progress_eta_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    progress_observed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # -- Outcome -------------------------------------------------------------
+    failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    failure_retry_after_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        # The reclaim sweep: every lease that has lapsed. Without this it is a
+        # full scan on every tick of the recovery timer.
+        Index("ix_job_queue_lease_expires_at", "lease_expires_at"),
+        # Startup recovery: everything this identity still holds.
+        Index("ix_job_queue_lease_owner", "lease_owner"),
     )
 
 

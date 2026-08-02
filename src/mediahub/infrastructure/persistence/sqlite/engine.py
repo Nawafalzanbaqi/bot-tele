@@ -85,7 +85,7 @@ class SqliteDatabase:
     def __init__(self, settings: DatabaseSettings) -> None:
         """Create the engine, the file's parent directory, and the pragmas."""
         self._path = settings.sqlite_path
-        url = f"sqlite+aiosqlite:///{self._path}"
+        url = settings.sqlite_url
 
         if str(self._path) == MEMORY_PATH:
             url = "sqlite+aiosqlite://"
