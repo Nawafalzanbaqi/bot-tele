@@ -94,6 +94,10 @@ services:
       # delete the leases of downloads that are currently running.
       MEDIAHUB_WORKSPACE__PURGE_ON_START: "false"
       MEDIAHUB_DOWNLOAD__ENABLED: "false"
+      # This process serves HTTP; it does not run the bot. Saying so keeps a
+      # missing or rotated bot token from stopping the API booting, which is
+      # the role-scoped validation the architecture review asks for (20 4.20).
+      MEDIAHUB_TELEGRAM__ENABLED: "false"
     ports:
       # Loopback only. Reach it from another machine over the SSH tunnel, or
       # put it behind the reverse proxy this host already has. Publishing to
