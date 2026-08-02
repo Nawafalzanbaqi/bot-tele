@@ -68,11 +68,18 @@ class PersistenceBackend(StrEnum):
     """Which repository adapters the container wires up.
 
     Attributes:
-        POSTGRES: SQLAlchemy adapters against PostgreSQL. The real deployment.
+        SQLITE: A single file on the device. **The production deployment**
+            (ADR-0006): no second process, no administration, one file to back
+            up, and a transactional enqueue for free because the queue shares
+            the connection the repositories commit through.
+        POSTGRES: SQLAlchemy adapters against PostgreSQL. Supported for a
+            deployment that already runs one; unnecessary on an appliance, where
+            it costs a container, a pool and 200 MB to store a few thousand rows.
         MEMORY: In-process adapters. Tests and throwaway demos only - all data
             is lost when the process exits.
     """
 
+    SQLITE = "sqlite"
     POSTGRES = "postgres"
     MEMORY = "memory"
 
@@ -110,6 +117,10 @@ class DatabaseSettings(_ConfigSection):
 
     Attributes:
         backend: Which repository adapters to wire up.
+        sqlite_path: File holding the SQLite database, used when ``backend`` is
+            ``sqlite``. Put it on durable storage, not on a tmpfs, and back up
+            the file rather than copying it while it is live - a WAL database
+            copied with ``cp`` is a corrupt database.
         host: Database host name.
         port: Database port.
         user: Role used to connect.
@@ -121,7 +132,8 @@ class DatabaseSettings(_ConfigSection):
         echo: Log every emitted statement. Debugging only - very noisy.
     """
 
-    backend: PersistenceBackend = PersistenceBackend.POSTGRES
+    backend: PersistenceBackend = PersistenceBackend.SQLITE
+    sqlite_path: Path = Path("/data/mediahub.db")
     host: str = "localhost"
     port: int = Field(default=5432, ge=1, le=65535)
     user: str = "mediahub"
@@ -223,6 +235,12 @@ class DownloadSettings(_ConfigSection):
     Attributes:
         enabled: Wire the real engine. When false the container installs the
             null adapter and the API reports the feature as unavailable.
+        allow_merge: Permit fetching video and audio as separate streams and
+            combining them. **Requires FFmpeg on the device** - the runtime
+            image ships it. Turning this off does not disable the higher
+            qualities, it makes them quietly resolve to the best already-muxed
+            rendition instead, which on most platforms is 720p. The cost is CPU:
+            on a Pi a long 1080p merge is minutes of it.
         max_item_bytes: Hard ceiling per download, enforced while streaming.
         probe_timeout_seconds: Budget for a metadata probe.
         download_timeout_seconds: Wall-clock budget for one download.
@@ -244,6 +262,7 @@ class DownloadSettings(_ConfigSection):
     """
 
     enabled: bool = False
+    allow_merge: bool = True
     max_item_bytes: int = Field(default=2 * 1024**3, ge=1)
     probe_timeout_seconds: float = Field(default=30.0, gt=0)
     download_timeout_seconds: float = Field(default=3600.0, gt=0)
@@ -569,7 +588,10 @@ class Settings(BaseSettings):
         problems: list[str] = []
         if self.security.secret_key.get_secret_value() in INSECURE_DEFAULTS:
             problems.append("security.secret_key is still a placeholder")
-        if self.database.password.get_secret_value() in INSECURE_DEFAULTS:
+        if (
+            self.database.backend is PersistenceBackend.POSTGRES
+            and self.database.password.get_secret_value() in INSECURE_DEFAULTS
+        ):
             problems.append("database.password is still a placeholder")
         if self.database.backend is PersistenceBackend.MEMORY:
             problems.append("database.backend=memory loses all data on restart")

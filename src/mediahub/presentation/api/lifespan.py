@@ -50,6 +50,8 @@ def build_lifespan(settings: Settings, container: Container | None = None) -> Li
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Create resources, serve, then release them."""
         active = container if container is not None else build_container(settings)
+        if owns_container:
+            await active.prepare()
         app.state.container = active
         app.state.settings = settings
         app.state.debug = settings.is_debug

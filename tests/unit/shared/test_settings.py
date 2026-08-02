@@ -37,7 +37,9 @@ def test_defaults_are_usable_for_local_development() -> None:
 
     assert settings.environment is Environment.LOCAL
     assert settings.api.port == 8000
-    assert settings.database.backend is PersistenceBackend.POSTGRES
+    # SQLite is the system of record (ADR-0006): the default deployment is one
+    # file on one device, with no second process to administer.
+    assert settings.database.backend is PersistenceBackend.SQLITE
 
 
 def test_dsn_is_async_and_masks_the_password_when_logged() -> None:
@@ -65,7 +67,11 @@ def test_production_accepts_a_hardened_configuration() -> None:
     "overrides",
     [
         {"security": SecuritySettings(secret_key=SecretStr("change-me-in-production"))},
-        {"database": DatabaseSettings(password=SecretStr("mediahub"))},
+        {
+            "database": DatabaseSettings(
+                backend=PersistenceBackend.POSTGRES, password=SecretStr("mediahub")
+            )
+        },
         {"database": DatabaseSettings(backend=PersistenceBackend.MEMORY)},
         {"debug": True},
     ],
@@ -74,6 +80,17 @@ def test_production_accepts_a_hardened_configuration() -> None:
 def test_production_refuses_unsafe_configuration(overrides: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         production(**overrides)
+
+
+def test_production_on_sqlite_does_not_demand_a_postgres_password() -> None:
+    """SQLite has no password, so the placeholder one is not a finding.
+
+    Refusing to boot over an unused credential would be a false alarm - and a
+    false alarm in a startup guard is how the guard gets disabled.
+    """
+    settings = production(database=DatabaseSettings(backend=PersistenceBackend.SQLITE))
+
+    assert settings.database.backend is PersistenceBackend.SQLITE
 
 
 class TestWorkerSettings:

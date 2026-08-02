@@ -140,8 +140,26 @@ class TestSelectionFor:
         with pytest.raises(FormatUnavailableError):
             selection_for("h4320", options)
 
-    def test_never_asks_for_a_merge(self) -> None:
-        # Merging needs FFmpeg, which is a different subsystem's job.
+    def test_does_not_ask_for_a_merge_unless_the_deployment_allows_one(self) -> None:
+        # Merging needs FFmpeg. A deployment without one must not request it.
         options = build_quality_options(metadata(video_formats=(video(1080),)))
 
         assert not selection_for(BEST_KEY, options).allow_merge
+
+    def test_a_merging_deployment_asks_for_one(self) -> None:
+        """Otherwise the higher rungs are labels for a quality never delivered.
+
+        Above roughly 720p the large platforms ship video and audio separately.
+        Without a merge, "1080p" resolves to the best already-muxed rendition -
+        usually 720p - and nothing anywhere reports the substitution.
+        """
+        options = build_quality_options(metadata(video_formats=(video(1080),)))
+
+        assert selection_for(BEST_KEY, options, allow_merge=True).allow_merge
+        assert selection_for("h1080", options, allow_merge=True).allow_merge
+
+    def test_audio_only_never_merges_however_it_is_configured(self) -> None:
+        """There is no second stream to merge, and asking would cost a re-encode."""
+        options = build_quality_options(metadata(audio_formats=(AudioFormat(format_id="a"),)))
+
+        assert not selection_for(AUDIO_KEY, options, allow_merge=True).allow_merge

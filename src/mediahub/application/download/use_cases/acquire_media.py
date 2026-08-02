@@ -70,12 +70,17 @@ class AcquireMedia:
         journal: AcquisitionJournal,
         clock: Clock,
         max_item_bytes: int | None = None,
+        allow_merge: bool = False,
     ) -> None:
         """Wire the use case to its ports.
 
         ``delivery`` is a *router*, not a provider: the use case names a target
         and lets the router decide which destination owns it. That is what
         allows a new destination to be added without this file changing.
+
+        ``allow_merge`` is a deployment fact, not a per-request one: whether
+        this device can combine separate streams depends on whether it has a
+        merger, so it is configured once here rather than asked of every caller.
         """
         self._downloader = downloader
         self._delivery = delivery
@@ -83,6 +88,7 @@ class AcquireMedia:
         self._journal = journal
         self._clock = clock
         self._max_item_bytes = max_item_bytes
+        self._allow_merge = allow_merge
 
     async def execute(
         self,
@@ -123,7 +129,7 @@ class AcquireMedia:
         # format identifiers expire, and a stale one downloads the wrong thing.
         metadata = await self._downloader.probe(request.url)
         options = build_quality_options(metadata, max_bytes=self._max_item_bytes)
-        selection = selection_for(request.quality_key, options)
+        selection = selection_for(request.quality_key, options, allow_merge=self._allow_merge)
         chosen = next(option for option in options if option.key == request.quality_key)
 
         capabilities = self._delivery.capabilities_for(request.target)

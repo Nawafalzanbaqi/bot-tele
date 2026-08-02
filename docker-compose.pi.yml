@@ -1,0 +1,150 @@
+# ---------------------------------------------------------------------------
+# MediaHub on a Raspberry Pi that is already running other things.
+#
+#   telegram   the bot: long-polls, probes, downloads, delivers
+#   api        HTTP surface, for the web interface that comes later
+#   botapi     optional self-hosted Bot API server, raising 50 MB to 2 GB
+#
+# Run:  docker compose -f docker-compose.pi.yml up -d
+# With the local Bot API server:
+#       docker compose -f docker-compose.pi.yml --profile localapi up -d
+#
+# Three properties of this file exist because the device is shared:
+#
+# * **No database service.** SQLite is the system of record (ADR-0006). The
+#   host already runs two PostgreSQL instances and a Redis for other projects;
+#   a third would cost 200 MB to store a few thousand rows.
+# * **Every port is deliberate and none is a default.** 8000 belongs to
+#   devpulse, 4000 to engineeringos, 3001 to uptime-kuma. The API is published
+#   on 8090 and bound to loopback.
+# * **Memory limits on every service.** An unbounded download or upload on a
+#   4 GB board is not this project failing, it is the OOM killer choosing a
+#   victim among someone else's containers.
+# ---------------------------------------------------------------------------
+name: mediahub
+
+x-common: &common
+  image: mediahub/app:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: true
+  environment: &common-env
+    MEDIAHUB_ENVIRONMENT: production
+    MEDIAHUB_DATABASE__BACKEND: sqlite
+    MEDIAHUB_DATABASE__SQLITE_PATH: /data/mediahub.db
+    MEDIAHUB_WORKSPACE__ROOT: /data/workspace
+    MEDIAHUB_DOWNLOAD__ENABLED: "true"
+    MEDIAHUB_LOGGING__JSON_FORMAT: "true"
+  networks:
+    - mediahub
+  logging:
+    # Without this, a chatty container fills the card it is running on. The
+    # other projects on this host learn about it as "no space left on device".
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  telegram:
+    <<: *common
+    build:
+      context: .
+      target: runtime
+      args:
+        PYTHON_VERSION: "3.13"
+    command: ["python", "-m", "mediahub.presentation.telegram"]
+    environment:
+      <<: *common-env
+      MEDIAHUB_TELEGRAM__ENABLED: "true"
+      # This process owns the workspace root and is the only thing writing to
+      # it, so sweeping it at startup is correct here and would not be if the
+      # API shared it.
+      MEDIAHUB_WORKSPACE__PURGE_ON_START: "true"
+    volumes:
+      - data:/data
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          # An upload is buffered in memory by the client library, so this
+          # must exceed the largest artifact the destination will accept.
+          memory: 1200M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import sqlite3,sys; sqlite3.connect('/data/mediahub.db').execute('select 1'); sys.exit(0)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api:
+    <<: *common
+    command:
+      - uvicorn
+      - mediahub.presentation.api.app:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *common-env
+      # The gateway sweeps the workspace; a second process doing so would
+      # delete the leases of downloads that are currently running.
+      MEDIAHUB_WORKSPACE__PURGE_ON_START: "false"
+      MEDIAHUB_DOWNLOAD__ENABLED: "false"
+    ports:
+      # Loopback only. Reach it from another machine over the SSH tunnel, or
+      # put it behind the reverse proxy this host already has. Publishing to
+      # 0.0.0.0 would expose an unauthenticated API to the whole LAN.
+      - "127.0.0.1:8090:8000"
+    volumes:
+      - data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=5).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Opt-in: `--profile localapi`. Raises the upload ceiling from 50 MB to 2 GB.
+  # Needs TELEGRAM_API_ID and TELEGRAM_API_HASH from https://my.telegram.org -
+  # these identify the *application*, not the bot, and are not the bot token.
+  botapi:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    profiles: ["localapi"]
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - botapi:/var/lib/telegram-bot-api
+    networks:
+      - mediahub
+    deploy:
+      resources:
+        limits:
+          memory: 600M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # One volume holding the database and the scratch space. They are together
+  # because the Pi has one NVMe; on a machine with two devices the workspace
+  # belongs on the other one, so the write-heavy throwaway load stays away from
+  # the only irreplaceable file.
+  data:
+  botapi:
+
+networks:
+  mediahub:
+    driver: bridge

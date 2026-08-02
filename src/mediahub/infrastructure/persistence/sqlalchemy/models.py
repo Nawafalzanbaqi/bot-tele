@@ -14,6 +14,11 @@ Two deliberate choices worth remembering:
 * **Priority is denormalised into ``priority_weight``.** The scheduler must
   order by priority, and an index on an integer is the only way to do that
   without a CASE expression in every query.
+
+Timestamps use :class:`~mediahub.infrastructure.persistence.sqlite.types.UtcDateTime`
+rather than SQLAlchemy's ``DateTime(timezone=True)``. The two are identical on
+PostgreSQL; on SQLite the plain type returns naive datetimes and every aggregate
+load raises. See that module for the full account.
 """
 
 from __future__ import annotations
@@ -25,7 +30,6 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -37,6 +41,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mediahub.infrastructure.persistence.sqlalchemy.base import Base
+from mediahub.infrastructure.persistence.sqlite.types import UtcDateTime
 
 
 class MediaItemModel(Base):
@@ -59,8 +64,8 @@ class MediaItemModel(Base):
     checksum_algorithm: Mapped[str | None] = mapped_column(String(32), nullable=True)
     checksum_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     __table_args__ = (
         # Supports the default listing: newest first, optionally filtered.
@@ -96,10 +101,10 @@ class DownloadJobModel(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
     backoff_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     __table_args__ = (
         # The scheduler's claim query: queued work, highest priority, oldest first.
@@ -110,10 +115,47 @@ class DownloadJobModel(Base):
             "created_at",
         ),
         # At most one queued/running job per media item.
+        #
+        # Both dialect keywords are required. A `postgresql_where` alone is
+        # *silently dropped* on SQLite - no index, no error - which leaves the
+        # invariant resting on an application check that loses exactly the race
+        # the index exists to win.
         Index(
             "uq_download_jobs_active_media",
             "media_id",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
         ),
+    )
+
+
+class JournalEntryModel(Base):
+    """Row shape of one completed acquisition.
+
+    A few hundred bytes that outlive a file of a few hundred megabytes: after
+    delivery the bytes are the destination's, and this is all that remains. It
+    is what ``/history`` reads, and it is what would let an item be re-acquired
+    if the destination ever lost it.
+    """
+
+    __tablename__ = "journal_entries"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    quality_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    bytes_delivered: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    remote_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    remote_unique_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivered_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    __table_args__ = (
+        # The only query this table serves: one principal's history, newest
+        # first. A principal sees only their own - on a shared household device
+        # one person's viewing is not another's business.
+        Index("ix_journal_entries_principal_delivered", "principal", text("delivered_at DESC")),
     )

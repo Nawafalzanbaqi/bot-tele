@@ -69,6 +69,17 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:${PATH}" \
     MEDIAHUB_ENVIRONMENT=production
 
+# FFmpeg is what makes the high qualities reachable at all. Above roughly 720p
+# every large platform ships video and audio as separate streams, so "1080p"
+# means "fetch two files and mux them" - without a merger the engine silently
+# falls back to the best already-muxed rendition and the user gets 720p having
+# asked for 1080p. From the distribution rather than a static build, so it gets
+# security updates through a base image rebuild
+# (docs/architecture/18-deployment-architecture.md §18.2).
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 1001 mediahub \
     && useradd --uid 1001 --gid mediahub --create-home --shell /bin/bash mediahub
 
@@ -79,7 +90,7 @@ COPY --chown=mediahub:mediahub alembic.ini ./alembic.ini
 COPY --chown=mediahub:mediahub migrations ./migrations
 COPY --chown=mediahub:mediahub docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
-    && mkdir -p /data/library /data/staging \
+    && mkdir -p /data/workspace \
     && chown -R mediahub:mediahub /data
 
 USER mediahub

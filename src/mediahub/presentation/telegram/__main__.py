@@ -51,6 +51,7 @@ def main() -> None:
 async def _run(settings: Settings) -> None:  # pragma: no cover - process wiring
     """Wire everything together and poll until asked to stop."""
     container = build_container(settings)
+    await container.prepare()
     telegram = settings.telegram
 
     client = PythonTelegramBotClient(

@@ -76,6 +76,8 @@ from mediahub.infrastructure.persistence.sqlalchemy.engine import Database
 from mediahub.infrastructure.persistence.sqlalchemy.unit_of_work import (
     SqlAlchemyUnitOfWorkFactory,
 )
+from mediahub.infrastructure.persistence.sqlite.engine import SqliteDatabase
+from mediahub.infrastructure.persistence.sqlite.journal import SqliteAcquisitionJournal
 from mediahub.infrastructure.security.address_guard import DnsAddressGuard
 from mediahub.infrastructure.security.audit_sink import LoggingAuditSink
 from mediahub.infrastructure.system.clock import SystemClock
@@ -122,7 +124,7 @@ class Container:
     unit_of_work: UnitOfWorkFactory
     downloader: DownloaderPort
     workspace: WorkspacePort | None = None
-    database: Database | None = None
+    database: Database | SqliteDatabase | None = None
     job_queue: JobQueue | None = None
     journal: AcquisitionJournal = field(default_factory=InMemoryAcquisitionJournal)
     audit: AuditSink = field(default_factory=LoggingAuditSink)
@@ -319,6 +321,7 @@ class Container:
             journal=self.journal,
             clock=self.clock,
             max_item_bytes=self.settings.download.max_item_bytes,
+            allow_merge=self.settings.download.allow_merge,
         )
 
     def delivery_router(self, *providers: DeliveryProvider) -> DeliveryProviderRegistry:
@@ -370,6 +373,19 @@ class Container:
         )
 
     # -- Lifecycle -----------------------------------------------------------
+
+    async def prepare(self) -> None:
+        """Make the store ready to be used. Safe to call twice.
+
+        Only SQLite does anything here, and it does two things: create any
+        missing tables, so a fresh device boots into a working system without a
+        separate migrate step; and *verify* that the pragmas took effect, since
+        a foreign-key pragma that silently failed to apply is precisely the
+        class of defect the SQLite adapter exists to prevent.
+        """
+        if isinstance(self.database, SqliteDatabase):
+            await self.database.create_schema()
+            await self.database.verify_pragmas()
 
     async def check_database(self) -> bool:
         """Return whether the persistence backend answers.
@@ -451,11 +467,19 @@ def build_container(settings: Settings) -> Container:
         A fully wired container. The caller owns it and must call
         :meth:`Container.shutdown` when done.
     """
-    database: Database | None = None
+    database: Database | SqliteDatabase | None = None
     unit_of_work: UnitOfWorkFactory
     job_queue: JobQueue | None = None
+    journal: AcquisitionJournal = InMemoryAcquisitionJournal()
 
-    if settings.database.backend is PersistenceBackend.POSTGRES:
+    if settings.database.backend is PersistenceBackend.SQLITE:
+        sqlite = SqliteDatabase(settings.database)
+        database = sqlite
+        unit_of_work = SqlAlchemyUnitOfWorkFactory(sqlite.session_factory)
+        # History outlives the process here, which on a device that loses power
+        # is the normal case rather than the exceptional one.
+        journal = SqliteAcquisitionJournal(sqlite.session_factory)
+    elif settings.database.backend is PersistenceBackend.POSTGRES:
         database = Database(settings.database)
         unit_of_work = SqlAlchemyUnitOfWorkFactory(database.session_factory)
     else:
@@ -479,7 +503,7 @@ def build_container(settings: Settings) -> Container:
         workspace=workspace,
         database=database,
         job_queue=job_queue,
-        journal=InMemoryAcquisitionJournal(),
+        journal=journal,
         audit=LoggingAuditSink(),
         allow_list=_build_allow_list(settings),
         authorization=AuthorizationPolicy(),

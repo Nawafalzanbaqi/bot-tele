@@ -104,12 +104,21 @@ def build_quality_options(
     return tuple(options[:MAX_OPTIONS])
 
 
-def selection_for(key: str, options: Sequence[QualityOption]) -> FormatSelection:
+def selection_for(
+    key: str, options: Sequence[QualityOption], *, allow_merge: bool = False
+) -> FormatSelection:
     """Return the engine-neutral selection a chosen key means.
 
     Args:
         key: The key of an option previously offered.
         options: The options that were offered, used to validate the key.
+        allow_merge: Whether separate video and audio streams may be combined,
+            which requires a merger on the device. **This is what makes the
+            higher rungs mean what they say.** Above roughly 720p every large
+            platform ships video and audio separately; without merging, a
+            request for 1080p quietly resolves to the best *already-muxed*
+            rendition - usually 720p - and nothing reports that the button did
+            not do what it said.
 
     Returns:
         The selection to hand to the download engine.
@@ -128,8 +137,8 @@ def selection_for(key: str, options: Sequence[QualityOption]) -> FormatSelection
     if chosen.is_audio_only:
         return FormatSelection.audio_only()
     if chosen.height is not None:
-        return FormatSelection.up_to_height(chosen.height)
-    return FormatSelection.best()
+        return FormatSelection.up_to_height(chosen.height, allow_merge=allow_merge)
+    return FormatSelection.best(allow_merge=allow_merge)
 
 
 def _bucket(height: int) -> int | None:
