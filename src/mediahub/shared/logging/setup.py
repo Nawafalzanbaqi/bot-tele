@@ -21,6 +21,7 @@ from loguru import logger
 
 from mediahub.shared.logging.context import UNSET_CORRELATION_ID, get_correlation_id
 from mediahub.shared.logging.intercept import configure_stdlib_logging
+from mediahub.shared.logging.redaction import scrub_record
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from loguru import Record
@@ -37,13 +38,18 @@ TEXT_FORMAT = (
 """Human-oriented format. Timestamps are always rendered in UTC."""
 
 
-def _inject_correlation_id(record: Record) -> None:
-    """Add the current correlation id to every record before it is formatted.
+def _patch_record(record: Record) -> None:
+    """Prepare every record before any sink formats it.
 
-    Loguru calls this patcher for each record, which is why no call site ever
-    has to pass the id explicitly.
+    Two jobs, in one patcher because Loguru allows exactly one.
+
+    The redaction half is not optional and is not defence in depth: the bot
+    token is part of the URL of every Telegram API call, and the HTTP client
+    logs the URL it requested. Between the record and the sink is the only
+    place that line can be stopped (:mod:`mediahub.shared.logging.redaction`).
     """
     record["extra"].setdefault("correlation_id", get_correlation_id())
+    scrub_record(record)
 
 
 def configure_logging(settings: Settings) -> None:
@@ -59,7 +65,7 @@ def configure_logging(settings: Settings) -> None:
 
     logger.remove()
     logger.configure(
-        patcher=_inject_correlation_id,
+        patcher=_patch_record,
         extra={"correlation_id": UNSET_CORRELATION_ID},
     )
     logger.add(
