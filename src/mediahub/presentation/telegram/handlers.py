@@ -262,10 +262,10 @@ class TelegramHandlers:
 
     async def _explain_failure(self, code: str, *, url: str) -> str:
         """Render a probe failure together with what is likely behind it."""
-        installed = False
+        cookies = None
         with contextlib.suppress(Exception):
-            installed = await self._services.describe_cookies.execute() is not None
-        return formatters.render_source_failure(code, url=url, cookies_installed=installed)
+            cookies = await self._services.describe_cookies.execute()
+        return formatters.render_source_failure(code, url=url, cookies=cookies)
 
     async def _on_document(self, intent: Intent, principal: Principal) -> None:
         """Treat an attached file as a cookie jar, and nothing else.

@@ -798,7 +798,7 @@ class TestFailureExplainsItself:
 
         await handle(handlers, message_update("https://x.com/someone/status/123"))
 
-        assert "logged-out visitor" in messenger.last_text
+        assert "no sign-in cookies stored" in messenger.last_text.lower()
 
     async def test_with_cookies_stored_it_suggests_they_lapsed(self) -> None:
         """A different cause needs a different action."""
@@ -810,7 +810,10 @@ class TestFailureExplainsItself:
 
         await handle(handlers, message_update("https://x.com/someone/status/123", update_id=30))
 
-        assert "may have lapsed" in messenger.last_text
+        assert (
+            "not x.com" in messenger.last_text.lower()
+            or "may have stopped" in messenger.last_text.lower()
+        )
 
     async def test_an_ordinary_site_gets_no_cookie_advice(self) -> None:
         """Advice that appears everywhere is advice nobody reads."""

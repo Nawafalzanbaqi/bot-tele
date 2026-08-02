@@ -49,9 +49,28 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "upload_failed": "I could not read that file. Try sending it again.",
     "unsupported_url_scheme": "I can only fetch http and https links.",
     "blocked_address": "That address is not reachable from here.",
-    "unsupported_provider": "I do not know how to handle that site.",
+    "unsupported_provider": (
+        "I do not know how to handle that site. Check the link is a direct link "
+        "to one post or video."
+    ),
+    "authentication_required": (
+        "🔒 This needs a signed-in session.\n\n"
+        "The post is probably there — the site just will not show it to a "
+        "logged-out visitor."
+    ),
+    "geo_restricted": (
+        "🌍 This is not published in this device's country.\n\n"
+        "Cookies will not help; the block is on where the machine is."
+    ),
+    "content_removed": (
+        "🗑 That no longer exists — deleted, suspended, or the link is wrong.\n\n"
+        "Check the link opens in your own browser."
+    ),
+    "rate_limited": (
+        "⏳ The site is asking me to slow down. Wait a few minutes and send it " "again."
+    ),
     "metadata_unavailable": (
-        "I could not read that link. It may be private, removed or region-locked."
+        "I could not read that link. It may be private, age-restricted or " "behind a paywall."
     ),
     "format_unavailable": "That quality is no longer available. Send the link again.",
     "provider_error": "The site is having trouble right now. Try again in a few minutes.",
@@ -300,34 +319,77 @@ that thirty seconds of exporting cookies would fix it.
 _SESSION_FAILURES: Final[frozenset[str]] = frozenset(
     {"metadata_unavailable", "unsupported_provider", "download_failed", "provider_error"}
 )
-"""Codes a missing session produces. All of them also have innocent causes,
-which is why the hint is offered rather than asserted."""
+"""Codes that *may* mean a missing session. All have innocent causes too, so on
+these the advice is offered only for a host known to gate on one.
+
+``authentication_required`` is deliberately absent: it is not a maybe."""
 
 
-def render_source_failure(code: str, *, url: str, cookies_installed: bool) -> str:
-    """Render a probe failure, adding why it may have happened.
+def render_source_failure(code: str, *, url: str, cookies: CookieSummary | None) -> str:
+    """Render a probe failure together with what is likely behind it.
 
     Args:
         code: The stable error code.
         url: What the user sent, used only to recognise the host.
-        cookies_installed: Whether a jar is already stored. When one is, the
-            advice changes from "add cookies" to "yours may have lapsed",
-            which is the far more likely explanation and a different action.
+        cookies: The stored jar, if any. Three states produce three different
+            instructions, and getting this wrong wastes real time: with no jar
+            the answer is to export one; with an *expired* jar the answer is to
+            replace it; with a live jar for other sites the answer is that this
+            particular site is not covered by it.
     """
     base = render_error(code)
-    if code not in _SESSION_FAILURES or not _needs_session(url):
+    certain = code == "authentication_required"
+    if not certain and (code not in _SESSION_FAILURES or not _needs_session(url)):
         return base
-    if cookies_installed:
+
+    if cookies is None:
+        return f"{base}\n\n{_ADVICE_NO_JAR}"
+    if _has_lapsed(cookies):
+        when = f"{cookies.earliest_expiry:%Y-%m-%d}" if cookies.earliest_expiry else "recently"
         return (
-            f"{base}\n\nThis site needs a signed-in session and the stored "
-            "cookies may have lapsed. Send me a fresh cookies.txt export, or "
-            "use /cookies to see what is stored."
+            f"{base}\n\n⚠️ Your stored cookies expired on {when}. Send me a "
+            "fresh export from a signed-in browser."
+        )
+    site = _host_of(url)
+    if site and not _covered_by(cookies, site):
+        covered = ", ".join(cookies.domains[:4]) or "nothing"
+        return (
+            f"{base}\n\nMy stored cookies cover {covered} — not {site}. Export "
+            f"a cookies.txt while {site} is open and send it to me."
         )
     return (
-        f"{base}\n\nThis site shows nothing to a logged-out visitor. Export a "
-        "Netscape-format cookies.txt from a browser that is signed in and send "
-        "it to me — see /help."
+        f"{base}\n\nMy cookies for this site may have stopped working. Send a "
+        "fresh export, or /cookies to see what is stored."
     )
+
+
+_ADVICE_NO_JAR: Final[str] = (
+    "I have no sign-in cookies stored. Export a Netscape-format cookies.txt "
+    "from a browser that is signed in to this site and send me the file — "
+    "see /help."
+)
+
+
+def _has_lapsed(cookies: CookieSummary) -> bool:
+    """Return whether the stored jar's first cookie has already expired."""
+    return cookies.earliest_expiry is not None and cookies.earliest_expiry < datetime.now(UTC)
+
+
+def _covered_by(cookies: CookieSummary, host: str) -> bool:
+    """Return whether the stored jar holds anything for ``host``.
+
+    Exporting the wrong browser tab is the mistake people actually make, and it
+    is invisible: the jar installs cleanly, reports a healthy cookie count, and
+    does nothing for the site being asked about.
+    """
+    return any(host == domain or host.endswith(f".{domain}") for domain in cookies.domains)
+
+
+def _host_of(url: str) -> str:
+    """Return a URL's host, without ``www.``."""
+    authority = url.split("//", maxsplit=1)[-1]
+    host = authority.split("/", maxsplit=1)[0].split("?", maxsplit=1)[0].lower()
+    return host.removeprefix("www.")
 
 
 def _needs_session(url: str) -> bool:

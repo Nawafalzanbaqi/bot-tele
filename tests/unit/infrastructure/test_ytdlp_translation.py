@@ -12,10 +12,14 @@ from pathlib import Path
 import pytest
 
 from mediahub.application.download.errors import (
+    AuthenticationRequiredError,
+    ContentRemovedError,
     DownloadFailedError,
     FormatUnavailableError,
+    GeoRestrictedError,
     MetadataUnavailableError,
     ProviderError,
+    RateLimitedError,
     UnsupportedProviderError,
 )
 from mediahub.application.download.ports import DownloadRequest, FormatSelection
@@ -247,12 +251,14 @@ class TestErrorClassification:
             ("Requested format is not available", FormatUnavailableError),
             ("Video unavailable", MetadataUnavailableError),
             ("This video is private", MetadataUnavailableError),
-            ("Sign in to confirm your age", MetadataUnavailableError),
+            # Age gates are fixed by signing in, so they are reported as
+            # something the user can act on rather than as "unavailable".
+            ("Sign in to confirm your age", AuthenticationRequiredError),
             (
                 "The uploader has not made this video available in your country",
-                MetadataUnavailableError,
+                GeoRestrictedError,
             ),
-            ("HTTP Error 429: Too Many Requests", ProviderError),
+            ("HTTP Error 429: Too Many Requests", RateLimitedError),
             ("HTTP Error 503: Service Unavailable", ProviderError),
             ("The read operation timed out", ProviderError),
             ("[Errno 104] Connection reset by peer", ProviderError),
@@ -353,3 +359,64 @@ class TestPlayableOutput:
         )
 
         assert options["merge_output_format"] == "mp4"
+
+
+SOURCE = "https://example.com/a"
+
+
+class TestFailuresNameTheirCause:
+    """A refusal must say which of several very different things happened.
+
+    All of these used to collapse into "I could not read that link", which is
+    true and useless: the user cannot tell a deleted post from one that needs
+    signing in, so they re-check the link for something only cookies fix.
+    """
+
+    @pytest.mark.parametrize(
+        ("message", "expected"),
+        [
+            # X returns this for a tweet that plainly has a video. Read as
+            # "gone" it is the single most misleading message in the product.
+            ("No video could be found in this tweet", AuthenticationRequiredError),
+            ("Unable to extract universal data for rehydration", AuthenticationRequiredError),
+            ("Your IP address is blocked from accessing this post", AuthenticationRequiredError),
+            ("NSFW tweet requires authentication", AuthenticationRequiredError),
+            ("This account is private", AuthenticationRequiredError),
+            ("Use --cookies-from-browser or --cookies", AuthenticationRequiredError),
+        ],
+        ids=["x-no-video", "tiktok-rehydration", "tiktok-ip", "nsfw", "private", "yt-dlp-advice"],
+    )
+    def test_session_gated_failures_are_recognised(
+        self, message: str, expected: type[Exception]
+    ) -> None:
+        assert isinstance(classify(RuntimeError(message), url=SOURCE), expected)
+
+    @pytest.mark.parametrize(
+        ("message", "expected"),
+        [
+            ("This account has been suspended", ContentRemovedError),
+            ("The video has been deleted", ContentRemovedError),
+            ("HTTP Error 404: Not Found", ContentRemovedError),
+            ("Video not available from your location", GeoRestrictedError),
+            ("This content is blocked in your country", GeoRestrictedError),
+        ],
+        ids=["suspended", "deleted", "404", "geo-location", "geo-country"],
+    )
+    def test_gone_and_geo_blocked_are_distinguished(
+        self, message: str, expected: type[Exception]
+    ) -> None:
+        assert isinstance(classify(RuntimeError(message), url=SOURCE), expected)
+
+    def test_a_session_gate_outranks_a_removal_phrase(self) -> None:
+        """Order matters: several gates are worded as if the thing were missing."""
+        error = classify(RuntimeError("No video could be found in this tweet"), url=SOURCE)
+
+        assert isinstance(error, AuthenticationRequiredError)
+        assert not isinstance(error, ContentRemovedError)
+
+    def test_rate_limiting_stays_transient(self) -> None:
+        """It is the one refusal where waiting is the whole instruction."""
+        error = classify(RuntimeError("HTTP Error 429: Too Many Requests"), url=SOURCE)
+
+        assert isinstance(error, RateLimitedError)
+        assert error.kind is FailureKind.TRANSIENT

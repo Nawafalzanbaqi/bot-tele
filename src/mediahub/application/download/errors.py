@@ -89,6 +89,54 @@ class MetadataUnavailableError(DownloadError):
     kind: ClassVar[FailureKind] = FailureKind.PERMANENT
 
 
+class AuthenticationRequiredError(DownloadError):
+    """The source exists but is not shown to a signed-out visitor.
+
+    Split out of :class:`MetadataUnavailableError` because it is the one cause
+    in that family the user can actually fix, and the fix is specific: supply a
+    cookie jar. Collapsed into "could not read that link" it is indistinguishable
+    from a deleted post, so the user concludes the link is dead and never learns
+    that thirty seconds of exporting cookies would have worked.
+    """
+
+    code: ClassVar[str] = "authentication_required"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
+class GeoRestrictedError(DownloadError):
+    """The source is not published in this device's country.
+
+    Distinct because no credential fixes it and retrying never will - the
+    honest answer is that this machine cannot fetch it.
+    """
+
+    code: ClassVar[str] = "geo_restricted"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
+class ContentRemovedError(DownloadError):
+    """The source is gone: deleted, suspended, or never existed.
+
+    Worth its own code so the answer can be "this no longer exists" rather than
+    "I could not read it", which sends people re-checking their link and their
+    cookies for something neither can cure.
+    """
+
+    code: ClassVar[str] = "content_removed"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
+class RateLimitedError(DownloadError):
+    """The platform is refusing for now because we asked too often.
+
+    Transient, and the only member of that family with a useful instruction:
+    wait. Reported separately so it is not confused with the site being down.
+    """
+
+    code: ClassVar[str] = "rate_limited"
+    kind: ClassVar[FailureKind] = FailureKind.TRANSIENT
+
+
 class FormatUnavailableError(DownloadError):
     """The requested rendition does not exist for this source.
 
