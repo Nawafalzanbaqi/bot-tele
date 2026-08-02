@@ -106,8 +106,16 @@ def render_help() -> str:
     )
 
 
-def render_source(summary: SourceSummary) -> str:
-    """Render what was found at a link, before anything is downloaded."""
+def render_source(summary: SourceSummary, *, automatic: bool = False) -> str:
+    """Render what was found at a link, before anything is downloaded.
+
+    Args:
+        summary: What the probe reported.
+        automatic: Whether acquisition is already starting at the best
+            deliverable quality. The line changes from an instruction to a
+            statement, because telling someone to choose when no keyboard is
+            coming is the worst of both.
+    """
     lines = [f"*{_escape(_clip(summary.title, _MAX_TITLE))}*"]
 
     facts: list[str] = [summary.provider]
@@ -121,10 +129,12 @@ def render_source(summary: SourceSummary) -> str:
         lines.append("\nThis is a live stream and cannot be fetched.")
     elif summary.is_playlist:
         lines.append("\nThis link is a collection. Send a link to a single item.")
-    elif summary.qualities:
-        lines.append("\nChoose a quality:")
-    else:
+    elif not summary.qualities:
         lines.append("\nNothing here can be fetched.")
+    elif automatic:
+        lines.append("\nFetching at the highest quality that will send…")
+    else:
+        lines.append("\nChoose a quality:")
 
     return "\n".join(lines)
 

@@ -21,13 +21,21 @@ from loguru import logger
 from mediahub.application.delivery.errors import ArtifactTooLargeError
 from mediahub.application.delivery.ports import DeliveryKind, DeliveryRequest
 from mediahub.application.download.dto import AcquisitionSummary
+from mediahub.application.download.errors import FormatUnavailableError
 from mediahub.application.download.journal import JournalEntry
 from mediahub.application.download.ports import DownloadRequest
-from mediahub.application.download.quality import build_quality_options, selection_for
+from mediahub.application.download.quality import (
+    AUTO_KEY,
+    build_quality_options,
+    resolve_auto,
+    selection_for,
+)
 from mediahub.application.workspace.ports import ArtifactRole
 from mediahub.domain.media.enums import MediaType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
+
     from mediahub.application.common.cancellation import CancellationToken
     from mediahub.application.common.ports import Clock
     from mediahub.application.delivery.ports import (
@@ -136,16 +144,20 @@ class AcquireMedia:
             allow_merge=self._allow_merge,
             prefer_compatible=self._prefer_compatible,
         )
+        # The ceiling is resolved *before* the quality is, because "the best one"
+        # is not a property of the source - it is the best one this destination
+        # will accept, and only the destination knows that number.
+        capabilities = self._delivery.capabilities_for(request.target)
+        ceiling = self._effective_ceiling(capabilities.maximum_file_size)
+
+        chosen = self._choose(request.quality_key, options, ceiling=ceiling)
         selection = selection_for(
-            request.quality_key,
+            chosen.key,
             options,
             allow_merge=self._allow_merge,
             prefer_compatible=self._prefer_compatible,
         )
-        chosen = next(option for option in options if option.key == request.quality_key)
 
-        capabilities = self._delivery.capabilities_for(request.target)
-        ceiling = self._effective_ceiling(capabilities.maximum_file_size)
         bound = logger.bind(
             provider=metadata.provider,
             quality=chosen.label,
@@ -220,6 +232,24 @@ class AcquireMedia:
             delivered_at=receipt.delivered_at,
             local_copy_released=True,
         )
+
+    @staticmethod
+    def _choose(
+        key: str, options: Sequence[QualityOption], *, ceiling: int | None
+    ) -> QualityOption:
+        """Return the option a request names, resolving ``auto`` against the ceiling.
+
+        Raises:
+            FormatUnavailableError: If a named key was never offered - the
+                correct answer for a stale button tapped an hour later.
+        """
+        if key == AUTO_KEY:
+            return resolve_auto(options, ceiling=ceiling)
+        chosen = next((option for option in options if option.key == key), None)
+        if chosen is None:
+            message = f"'{key}' is no longer an available quality for this source"
+            raise FormatUnavailableError(message)
+        return chosen
 
     def _effective_ceiling(self, delivery_limit: int) -> int:
         """Return the smaller of this deployment's and the destination's limit.

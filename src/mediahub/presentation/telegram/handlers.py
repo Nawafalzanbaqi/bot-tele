@@ -31,6 +31,7 @@ from mediahub.application.download.dto import (
     GetHistoryQuery,
     ProbeSourceQuery,
 )
+from mediahub.application.download.quality import AUTO_KEY
 from mediahub.domain.access.enums import Action
 from mediahub.domain.common.errors import DomainError
 from mediahub.presentation.telegram import formatters
@@ -111,6 +112,8 @@ class GatewayServices:
     discard_cookies: DiscardCookies
     progress_interval_seconds: float = 3.0
     history_limit: int = 10
+    auto_best_quality: bool = False
+    """Start immediately at the best deliverable quality, with no menu."""
 
 
 class TelegramHandlers:
@@ -224,15 +227,27 @@ class TelegramHandlers:
             owner=principal.identity, chat_id=intent.chat_id, summary=summary
         )
 
-        offerable = summary.qualities and not summary.is_live and not summary.is_playlist
-        markup = quality_keyboard(summary.qualities, token=session.token) if offerable else None
+        offerable = bool(summary.qualities) and not summary.is_live and not summary.is_playlist
+        # When the answer to "which quality?" is always "the best one that will
+        # fit", asking is a tap that delays every download and can be answered
+        # wrong. The keyboard is still built when the deployment wants a choice.
+        automatic = offerable and self._services.auto_best_quality
+        markup = (
+            None
+            if automatic or not offerable
+            else quality_keyboard(summary.qualities, token=session.token)
+        )
         message_id = await self._services.messenger.send_message(
             chat_id=intent.chat_id,
-            text=formatters.render_source(summary),
+            text=formatters.render_source(summary, automatic=automatic),
             reply_markup=markup,
             reply_to_message_id=intent.message_id,
         )
         session.prompt_message_id = message_id
+
+        if automatic:
+            self._spawn(self._acquire(session, principal, AUTO_KEY))
+            return
         if not offerable:
             self._services.sessions.discard(session.token)
 

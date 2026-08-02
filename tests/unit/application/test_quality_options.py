@@ -18,6 +18,7 @@ from mediahub.application.download.quality import (
     BEST_KEY,
     MAX_OPTIONS,
     build_quality_options,
+    resolve_auto,
     selection_for,
 )
 from mediahub.domain.media.enums import MediaType
@@ -295,3 +296,56 @@ class TestSizesAreDeliveredSizes:
         )
 
         assert [o.key for o in options if o.height] == ["h1080", "h720", "h360"]
+
+
+class TestResolveAuto:
+    """ "Best quality" means the best one that will actually arrive.
+
+    Asking the engine for the best rendition full stop is a different thing,
+    and on a long source it is routinely larger than any chat service accepts -
+    so the failure lands after the download rather than before it.
+    """
+
+    def test_the_tallest_that_fits_is_chosen(self) -> None:
+        options = build_quality_options(
+            metadata(video_formats=(video(1080, 90), video(720, 40), video(360, 10)))
+        )
+
+        assert resolve_auto(options, ceiling=50).key == "h720"
+
+    def test_with_no_ceiling_the_best_is_chosen(self) -> None:
+        options = build_quality_options(metadata(video_formats=(video(1080, 90), video(720, 40))))
+
+        assert resolve_auto(options, ceiling=None).key == BEST_KEY
+
+    def test_a_rung_of_unknown_size_is_a_candidate(self) -> None:
+        """An absent size is not a large one, and the engine caps while streaming."""
+        options = build_quality_options(metadata(video_formats=(video(1080, None),)))
+
+        assert resolve_auto(options, ceiling=10).key in {BEST_KEY, "h1080"}
+
+    def test_audio_is_the_fallback_when_no_video_fits(self) -> None:
+        """A two-hour talk that will not fit as video usually fits as sound."""
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080, 900), video(720, 800)),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5),),
+            ),
+            max_bytes=None,
+        )
+
+        assert resolve_auto(options, ceiling=10).is_audio_only
+
+    def test_video_is_preferred_over_audio_when_both_fit(self) -> None:
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(720, 20),),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5),),
+            )
+        )
+
+        assert not resolve_auto(options, ceiling=1000).is_audio_only
+
+    def test_a_source_offering_nothing_is_refused(self) -> None:
+        with pytest.raises(FormatUnavailableError):
+            resolve_auto((), ceiling=None)

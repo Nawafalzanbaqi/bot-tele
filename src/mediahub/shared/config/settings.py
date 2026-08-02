@@ -424,6 +424,11 @@ class TelegramSettings(_ConfigSection):
         owner_ids: Telegram user ids with full access.
         member_ids: Telegram user ids that may fetch and read their history.
         readonly_ids: Telegram user ids that may only look.
+        auto_best_quality: Start fetching immediately at the best quality
+            the destination will accept, instead of posting a keyboard and
+            waiting. The menu is a tap that delays every download to answer
+            a question whose answer is nearly always the same one; turn this
+            off where the choice is genuinely wanted.
         poll_timeout_seconds: Long-poll duration.
         progress_interval_seconds: Shortest gap between progress edits. Telegram
             tolerates roughly one edit per second per chat; three is polite.
@@ -439,6 +444,7 @@ class TelegramSettings(_ConfigSection):
     owner_ids: list[str] = Field(default_factory=list)
     member_ids: list[str] = Field(default_factory=list)
     readonly_ids: list[str] = Field(default_factory=list)
+    auto_best_quality: bool = True
     poll_timeout_seconds: int = Field(default=30, ge=1, le=120)
     progress_interval_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
     history_limit: int = Field(default=10, ge=1, le=50)

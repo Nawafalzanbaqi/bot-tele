@@ -28,6 +28,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 BEST_KEY: Final[str] = "best"
 AUDIO_KEY: Final[str] = "audio"
+AUTO_KEY: Final[str] = "auto"
+"""Means "decide for me: the best rung that can actually be delivered".
+
+Resolved by :func:`resolve_auto` at acquisition time rather than when the menu
+is built, because the answer depends on the destination's ceiling and only the
+acquisition knows which destination it is sending to. It is deliberately *not*
+the same as :data:`BEST_KEY`: "best available" asks the engine for the best
+rendition full stop, which on a long source is routinely larger than any chat
+service will accept, and the failure arrives after the download rather than
+before it.
+"""
 OFFERED_HEIGHTS: Final[tuple[int, ...]] = (2160, 1440, 1080, 720, 480, 360)
 """Heights worth offering. Anything else is rounded down to one of these, so a
 source with fourteen renditions still produces a readable list."""
@@ -161,6 +172,55 @@ def selection_for(
             chosen.height, allow_merge=allow_merge, prefer_compatible=prefer_compatible
         )
     return FormatSelection.best(allow_merge=allow_merge, prefer_compatible=prefer_compatible)
+
+
+def resolve_auto(options: Sequence[QualityOption], *, ceiling: int | None) -> QualityOption:
+    """Return the highest-quality option that will fit ``ceiling``.
+
+    Args:
+        options: What the source offers, best first.
+        ceiling: Largest deliverable size, or ``None`` for no limit.
+
+    Returns:
+        The best option that fits. Options of *unknown* size are treated as
+        candidates rather than skipped - an absent size is not a large one, and
+        the engine enforces the real ceiling while streaming, so guessing
+        pessimistically here would refuse renditions that would have been fine.
+
+    Raises:
+        FormatUnavailableError: If the source offers nothing at all.
+    """
+    if not options:
+        message = "this source offers nothing that can be fetched"
+        raise FormatUnavailableError(message)
+
+    rungs = [option for option in options if option.height is not None]
+    audio = [option for option in options if option.is_audio_only]
+    unbounded = next((option for option in options if option.key == BEST_KEY), None)
+
+    if ceiling is None:
+        # Nothing to weigh against, so "best" means best.
+        return unbounded or (rungs[0] if rungs else options[0])
+
+    # `BEST_KEY` is deliberately **not** a candidate once a ceiling exists. It
+    # asks the engine for the best rendition full stop, and its declared size -
+    # when it has one at all - describes the source rather than the rendition.
+    # It is precisely the choice that overshoots and fails after the download.
+    fits = [
+        option for option in rungs if option.approx_bytes is None or option.approx_bytes <= ceiling
+    ]
+    if fits:
+        # Rungs are emitted tallest-first, so the first that fits is the best.
+        return fits[0]
+
+    # Every known rung is too large. Sound is a real answer - a two-hour talk
+    # that will not fit as video usually still fits as audio - and it beats
+    # refusing outright.
+    if audio:
+        return audio[0]
+    if rungs:
+        return rungs[-1]
+    return unbounded or options[0]
 
 
 def _by_height(formats: Sequence[VideoFormat]) -> list[tuple[int, list[VideoFormat]]]:
