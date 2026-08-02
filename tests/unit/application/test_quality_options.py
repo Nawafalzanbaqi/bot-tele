@@ -17,6 +17,7 @@ from mediahub.application.download.quality import (
     AUDIO_KEY,
     BEST_KEY,
     MAX_OPTIONS,
+    ORIGINAL_KEY,
     build_quality_options,
     resolve_auto,
     selection_for,
@@ -349,3 +350,54 @@ class TestResolveAuto:
     def test_a_source_offering_nothing_is_refused(self) -> None:
         with pytest.raises(FormatUnavailableError):
             resolve_auto((), ceiling=None)
+
+
+class TestSourcesWithNoStreams:
+    """Stories, photo posts and bare file links publish no *streams*.
+
+    They are not unfetchable - there is simply nothing to choose between. The
+    menu used to be empty for them, so the bot answered "nothing here can be
+    fetched" for a story that downloads perfectly.
+    """
+
+    def test_an_image_post_offers_one_option(self) -> None:
+        options = build_quality_options(metadata(kind=MediaType.IMAGE))
+
+        assert [option.key for option in options] == [ORIGINAL_KEY]
+
+    def test_auto_takes_it(self) -> None:
+        options = build_quality_options(metadata(kind=MediaType.IMAGE))
+
+        assert resolve_auto(options, ceiling=1000).key == ORIGINAL_KEY
+
+    def test_it_is_taken_even_when_the_size_is_unknown(self) -> None:
+        """A ceiling cannot exclude the only thing on offer.
+
+        Weighing it would only ever mean refusing, and the engine still
+        enforces the real limit while streaming.
+        """
+        options = build_quality_options(metadata(kind=MediaType.IMAGE))
+
+        assert resolve_auto(options, ceiling=1).key == ORIGINAL_KEY
+
+    def test_it_asks_for_no_merge(self) -> None:
+        """There is no second stream; asking would send the engine hunting."""
+        options = build_quality_options(metadata(kind=MediaType.IMAGE))
+
+        selection = selection_for(ORIGINAL_KEY, options, allow_merge=True, prefer_compatible=True)
+
+        assert not selection.allow_merge
+        assert selection.max_height is None
+
+    def test_a_video_source_never_gets_this_entry(self) -> None:
+        """It exists for sources with nothing to choose, not as a fallback."""
+        options = build_quality_options(metadata(video_formats=(video(720, 10),)))
+
+        assert ORIGINAL_KEY not in [option.key for option in options]
+
+    def test_an_audio_only_source_keeps_its_own_entry(self) -> None:
+        options = build_quality_options(
+            metadata(audio_formats=(AudioFormat(format_id="a", filesize_bytes=10),))
+        )
+
+        assert [option.key for option in options] == [AUDIO_KEY]

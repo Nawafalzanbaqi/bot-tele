@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Final
 from mediahub.application.download.dto import QualityOption
 from mediahub.application.download.errors import FormatUnavailableError
 from mediahub.application.download.ports import FormatSelection
+from mediahub.domain.media.enums import MediaType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -28,6 +29,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 BEST_KEY: Final[str] = "best"
 AUDIO_KEY: Final[str] = "audio"
+ORIGINAL_KEY: Final[str] = "orig"
+"""Whatever the source is, as published - no rendition to choose between.
+
+Images, stories, photo slideshows and direct links to a file all report no
+streams at all. They are not unfetchable; there is simply nothing to pick, so
+the menu offers one entry rather than none.
+"""
 AUTO_KEY: Final[str] = "auto"
 """Means "decide for me: the best rung that can actually be delivered".
 
@@ -44,6 +52,9 @@ OFFERED_HEIGHTS: Final[tuple[int, ...]] = (2160, 1440, 1080, 720, 480, 360)
 source with fourteen renditions still produces a readable list."""
 
 MAX_OPTIONS: Final[int] = 6
+
+_STREAMLESS_KINDS: Final[frozenset[MediaType]] = frozenset({MediaType.IMAGE, MediaType.OTHER})
+"""Kinds that legitimately publish no streams, and are still fetchable."""
 
 
 def build_quality_options(
@@ -110,6 +121,26 @@ def build_quality_options(
             )
         )
 
+    if not options and not metadata.has_audio and metadata.kind in _STREAMLESS_KINDS:
+        # No streams were enumerated, and the probe says this is not the sort
+        # of thing that has any: an image post, a story, a photo slideshow or a
+        # bare link to a file. They are perfectly fetchable and used to be
+        # refused with "nothing here can be fetched" - wrong, and unactionable.
+        #
+        # Narrowed by kind on purpose. A *video* with no formats really is a
+        # failure, and offering to fetch it would replace an honest refusal at
+        # probe time with a download that fails later having spent a slot.
+        options.append(
+            QualityOption(
+                key=ORIGINAL_KEY,
+                label="Original",
+                format_id=None,
+                height=None,
+                approx_bytes=metadata.expected_bytes,
+                is_audio_only=False,
+            )
+        )
+
     if metadata.has_audio:
         best_audio = metadata.audio_formats[0]
         if not _exceeds(best_audio.filesize_bytes, max_bytes):
@@ -167,6 +198,11 @@ def selection_for(
 
     if chosen.is_audio_only:
         return FormatSelection.audio_only(prefer_compatible=prefer_compatible)
+    if chosen.key == ORIGINAL_KEY:
+        # No rendition to choose and nothing to merge: take what is published.
+        # Asking for a merge here would make the engine look for a second
+        # stream that does not exist and fall through its alternatives.
+        return FormatSelection.best()
     if chosen.height is not None:
         return FormatSelection.up_to_height(
             chosen.height, allow_merge=allow_merge, prefer_compatible=prefer_compatible
@@ -193,6 +229,13 @@ def resolve_auto(options: Sequence[QualityOption], *, ceiling: int | None) -> Qu
     if not options:
         message = "this source offers nothing that can be fetched"
         raise FormatUnavailableError(message)
+
+    original = next((option for option in options if option.key == ORIGINAL_KEY), None)
+    if original is not None:
+        # One entry, because the source published one thing. Weighing it
+        # against a ceiling would only ever mean refusing it, and the engine
+        # enforces the real limit while streaming anyway.
+        return original
 
     rungs = [option for option in options if option.height is not None]
     audio = [option for option in options if option.is_audio_only]
