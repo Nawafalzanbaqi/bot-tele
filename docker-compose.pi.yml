@@ -5,9 +5,14 @@
 #   api        HTTP surface, for the web interface that comes later
 #   botapi     optional self-hosted Bot API server, raising 50 MB to 2 GB
 #
+#   vpn        optional egress for the download engine, when the network the
+#              device sits on refuses to carry some of its traffic
+#
 # Run:  docker compose -f docker-compose.pi.yml up -d
 # With the local Bot API server:
 #       docker compose -f docker-compose.pi.yml --profile localapi up -d
+# With both:
+#       docker compose -f docker-compose.pi.yml --profile localapi --profile vpn up -d
 #
 # Three properties of this file exist because the device is shared:
 #
@@ -182,6 +187,65 @@ services:
       resources:
         limits:
           memory: 600M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Opt-in: `--profile vpn`. An egress for the download engine only.
+  #
+  # **Only the engine's traffic goes through it, not the container's.** That is
+  # the whole design, and the alternative is worse in three ways: routing the
+  # gateway through a tunnel would send every Telegram upload through it as
+  # well - slower, and metered on most subscriptions - and `network_mode:
+  # service:vpn` would take the gateway off this network entirely, so it could
+  # no longer resolve `botapi`, which is the one thing that makes 2 GB uploads
+  # possible. Pointing MEDIAHUB_DOWNLOAD__PROXY at this service instead keeps
+  # delivery on the direct path and moves only the fetching.
+  #
+  # Gluetun rather than a hand-rolled WireGuard container: it speaks ~50
+  # providers' native configuration, publishes arm64 images, and carries the
+  # HTTP proxy this needs, so the wiring below does not change with provider.
+  #
+  # Set in .env:
+  #   VPN_SERVICE_PROVIDER, VPN_TYPE, and the credentials your provider uses
+  #   MEDIAHUB_DOWNLOAD__PROXY=http://vpn:8888
+  #
+  # A kill switch is inherent: if the tunnel drops, the proxy stops answering
+  # and downloads fail. They do not quietly fall back to the direct route.
+  vpn:
+    image: qmcgaw/gluetun:latest
+    restart: unless-stopped
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Empty defaults, for the same reason as `botapi` above: Compose
+      # interpolates every service in the file, including inactive profiles.
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:-}
+      VPN_TYPE: ${VPN_TYPE:-wireguard}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
+      WIREGUARD_PUBLIC_KEY: ${WIREGUARD_PUBLIC_KEY:-}
+      WIREGUARD_ENDPOINT_IP: ${WIREGUARD_ENDPOINT_IP:-}
+      WIREGUARD_ENDPOINT_PORT: ${WIREGUARD_ENDPOINT_PORT:-}
+      OPENVPN_USER: ${OPENVPN_USER:-}
+      OPENVPN_PASSWORD: ${OPENVPN_PASSWORD:-}
+      SERVER_COUNTRIES: ${VPN_COUNTRIES:-}
+      # The proxy the engine talks to. Listening on the container network only;
+      # no port is published to the host.
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: ":8888"
+      TZ: ${TZ:-Asia/Riyadh}
+    networks:
+      - mediahub
+    deploy:
+      resources:
+        limits:
+          memory: 200M
     logging:
       driver: json-file
       options:

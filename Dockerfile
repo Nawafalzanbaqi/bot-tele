@@ -58,7 +58,12 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # User-Agent it claims, which is why those sites answer with a challenge page
 # instead of the media. curl_cffi presents a real browser's fingerprint, and it
 # is the difference between "unable to extract" and a download.
-RUN python -m pip install --upgrade --pre "yt-dlp[default,curl-cffi]"
+#
+# PySocks alongside it, so a `socks5://` proxy works. yt-dlp accepts the URL
+# either way and only discovers the missing library when a download is already
+# under way, which turns a one-line configuration mistake into an intermittent
+# runtime failure.
+RUN python -m pip install --upgrade --pre "yt-dlp[default,curl-cffi]" "PySocks>=1.7.1"
 
 # --------------------------------------------------------------------------- #
 # Development                                                                  #
