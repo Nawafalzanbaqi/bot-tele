@@ -125,8 +125,21 @@ honestly but reads like a bug in the bot:
 | Platform | What it says | What it means |
 | -------- | ------------ | ------------- |
 | X / Twitter | `No video could be found in this tweet` | The post exists; the media is not served to a logged-out session |
-| TikTok | `Your IP address is blocked from accessing this post` | The address, not the post - TikTok blocks broadly |
+| TikTok | `Your IP address is blocked` / `Unable to extract universal data` | Neither message is literal - see below |
 | Instagram | varies | Private accounts, and increasingly public ones |
+
+**TikTok's two messages are the same cause.** Fetching a profile page from the
+target device returns HTTP 200 and about 1.4 kB - where a real page is hundreds
+of kilobytes - containing `SlardarWAF` and "Please wait…". That is TikTok's web
+application firewall serving a JavaScript challenge, not a block and not a
+broken extractor. Whether the extractor reports "IP blocked" or "unable to
+extract" depends on which stub it happened to receive, which is why the message
+changes between attempts on the same URL.
+
+A real browser solves that challenge and is issued clearance cookies. Exporting
+those is what gets past it - so the fix is the same as for X, and it is worth
+exporting from a device on the **same network as the Pi**, since clearance is
+often tied to the address that earned it.
 
 The fix for all three is the same: give the engine a cookie jar exported from a
 browser that is logged in.
