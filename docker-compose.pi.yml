@@ -225,16 +225,23 @@ services:
     environment:
       # Empty defaults, for the same reason as `botapi` above: Compose
       # interpolates every service in the file, including inactive profiles.
-      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:-}
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:-custom}
       VPN_TYPE: ${VPN_TYPE:-wireguard}
+      VPN_ENDPOINT_IP: ${VPN_ENDPOINT_IP:-}
+      VPN_ENDPOINT_PORT: ${VPN_ENDPOINT_PORT:-}
       WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
-      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
       WIREGUARD_PUBLIC_KEY: ${WIREGUARD_PUBLIC_KEY:-}
-      WIREGUARD_ENDPOINT_IP: ${WIREGUARD_ENDPOINT_IP:-}
-      WIREGUARD_ENDPOINT_PORT: ${WIREGUARD_ENDPOINT_PORT:-}
+      WIREGUARD_PRESHARED_KEY: ${WIREGUARD_PRESHARED_KEY:-}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
+      # Only consulted when VPN_SERVICE_PROVIDER names a provider rather than
+      # `custom`; harmless when it does not.
       OPENVPN_USER: ${OPENVPN_USER:-}
       OPENVPN_PASSWORD: ${OPENVPN_PASSWORD:-}
       SERVER_COUNTRIES: ${VPN_COUNTRIES:-}
+      # The tunnel's own resolver. Left to gluetun's default rather than copied
+      # from the .conf: a DNS server reachable only inside the tunnel is a
+      # reasonable thing for a config to name, and gluetun already runs one.
+      DOT: ${VPN_DOT:-on}
       # The proxy the engine talks to. Listening on the container network only;
       # no port is published to the host.
       HTTPPROXY: "on"
