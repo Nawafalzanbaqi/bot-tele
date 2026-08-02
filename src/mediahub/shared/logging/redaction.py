@@ -30,7 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 PLACEHOLDER: Final[str] = "***REDACTED***"
 
-_TELEGRAM_TOKEN = re.compile(r"(\d{6,12}):([A-Za-z0-9_-]{30,})")
+_TELEGRAM_TOKEN = re.compile(r"(\d{6,12})(:|%3A|%3a)([A-Za-z0-9_-]{30,})")
 """A bot token, wherever it appears - in a URL, a message or a traceback.
 
 Note the **absence of a leading** ``\\b``. The token's usual habitat is
@@ -38,6 +38,13 @@ Note the **absence of a leading** ``\\b``. The token's usual habitat is
 of "bot" - two word characters, so there is no word boundary there and a
 ``\\b`` would make this pattern silently never fire in exactly the place the
 credential actually leaks.
+
+The separator alternation matters for the same reason. A token that has been
+through URL encoding carries ``%3A`` rather than ``:``, and that form appears
+in precisely the paths a *self-hosted* Bot API server hands back - so matching
+only the literal colon leaks the whole credential on a deployment that had
+taken the trouble to run its own server. Found in production logs, not in
+review.
 
 The bot id before the colon is deliberately *kept*: it is not the secret half,
 it is what makes a line attributable to one bot, and losing it would make a
@@ -90,7 +97,7 @@ def redact(text: str) -> str:
     """
     if not text:
         return text
-    result = _TELEGRAM_TOKEN.sub(rf"\1:{PLACEHOLDER}", text)
+    result = _TELEGRAM_TOKEN.sub(rf"\1\2{PLACEHOLDER}", text)
     result = _URL_CREDENTIALS.sub(rf"\1:{PLACEHOLDER}@", result)
     return _SENSITIVE_ASSIGNMENT.sub(rf"\1\2{PLACEHOLDER}", result)
 

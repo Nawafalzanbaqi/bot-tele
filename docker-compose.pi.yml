@@ -76,6 +76,17 @@ services:
       # The exposure is bounded and worth it: one process reads and writes this
       # file, it runs as a non-root user, and the file is 0600.
       - ./secrets:/secrets
+      # The self-hosted Bot API server's data directory, read-only.
+      #
+      # In local mode that server does not serve an uploaded file over HTTP -
+      # it writes the file to its own disk and `getFile` returns an absolute
+      # path to it. Without this mount that path names a file this process
+      # cannot open, and every upload fails on exactly the deployments that
+      # went to the trouble of running their own server.
+      #
+      # Harmless when the `localapi` profile is not in use: the volume is then
+      # simply empty.
+      - botapi:/var/lib/telegram-bot-api:ro
     stop_grace_period: 60s
     deploy:
       resources:

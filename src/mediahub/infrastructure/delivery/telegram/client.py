@@ -22,6 +22,7 @@ be replaced without touching anything else.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 
@@ -29,13 +30,13 @@ import io
 # that is evaluated when the module is loaded by the type checker.
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterator, Sequence
-    from pathlib import Path
 
 # The library is imported into deliberately untyped holders. It is an optional
 # install, so the module must import without it; and everything it returns is
@@ -55,6 +56,13 @@ try:  # pragma: no cover - exercised by the presence or absence of the package
     _InlineKeyboardButton = InlineKeyboardButton
 except ImportError:  # pragma: no cover - the library is an optional install
     pass
+
+
+def _read_if_present(path: Path) -> bytes | None:
+    """Return a file's bytes, or ``None`` if it is not there to read."""
+    if not path.is_file():
+        return None
+    return path.read_bytes()
 
 
 def _to_markup(raw: Mapping[str, Any] | None) -> Any:  # pragma: no cover - network
@@ -248,11 +256,45 @@ class PythonTelegramBotClient:
             message = f"that file is {declared} bytes; the limit is {max_bytes}"
             raise ValueError(message)
 
-        payload = bytes(await handle.download_as_bytearray())
+        payload = await self._read(handle)
         if len(payload) > max_bytes:
             message = f"that file is {len(payload)} bytes; the limit is {max_bytes}"
             raise ValueError(message)
         return payload
+
+    @staticmethod
+    async def _read(handle: Any) -> bytes:  # pragma: no cover - requires the network
+        """Return an uploaded file's bytes, from wherever this server keeps them.
+
+        The two Bot API servers answer ``getFile`` differently, and the
+        difference is easy to miss because only one of them is exercised in
+        development:
+
+        * The public server returns a *relative* path, and the client fetches
+          it over HTTPS.
+        * A **self-hosted** server in local mode has already written the file
+          to its own disk and returns an *absolute* path to it. Handing that to
+          the downloader produces a request for
+          ``api.telegram.org/file/bot<token>//var/lib/...``, which is a 404 -
+          and the upload fails on exactly the deployments that went to the
+          trouble of running their own server.
+
+        The absolute path is readable here because the server's data volume is
+        mounted into this container.
+        """
+        path = getattr(handle, "file_path", None)
+        if isinstance(path, str) and path.startswith("/"):
+            # Off the event loop: this runs on the gateway's poll loop, and a
+            # blocking read there stalls every other conversation. The file is
+            # small, but "small" is not a property this code can rely on.
+            payload = await asyncio.to_thread(_read_if_present, Path(path))
+            if payload is not None:
+                return payload
+            logger.bind(path=path).warning(
+                "The Bot API server reported a local file this process cannot see; "
+                "its data volume is probably not mounted here"
+            )
+        return bytes(await handle.download_as_bytearray())
 
     async def delete_message(
         self, *, chat_id: str, message_id: int

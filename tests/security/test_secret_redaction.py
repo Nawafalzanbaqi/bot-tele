@@ -145,3 +145,31 @@ def test_redaction_survives_the_json_sink(sink: list[str]) -> None:
 
     (line,) = sink
     assert BOT_SECRET not in line
+
+
+class TestUrlEncodedTokens:
+    """A token that has been through URL encoding is still a token.
+
+    Found in production logs, not in review: a self-hosted Bot API server
+    hands back file paths containing the token with the colon percent-encoded,
+    so a pattern matching only the literal colon published the whole
+    credential on exactly the deployments that had taken the trouble to run
+    their own server.
+    """
+
+    def test_a_percent_encoded_token_is_redacted(self, sink: list[str]) -> None:
+        logger.info(
+            f"GET https://api.telegram.org/file/bot{BOT_ID}%3A{BOT_SECRET}"
+            f"/var/lib/telegram-bot-api/documents/file_0.txt"
+        )
+
+        (line,) = sink
+        assert not contains_secret(line, secrets=[BOT_SECRET])
+        assert PLACEHOLDER in line
+
+    def test_the_lowercase_encoding_is_redacted_too(self) -> None:
+        assert BOT_SECRET not in redact(f"bot{BOT_ID}%3a{BOT_SECRET}/getFile")
+
+    def test_the_bot_id_still_survives_encoding(self) -> None:
+        """Attributability must not depend on which encoding was used."""
+        assert BOT_ID in redact(f"bot{BOT_ID}%3A{BOT_SECRET}/getMe")
