@@ -290,6 +290,20 @@ class DownloadSettings(_ConfigSection):
             idempotent, so retrying them inside the engine is safe; downloads are
             retried by the queue instead, where the budget is visible.
         probe_backoff_seconds: Base delay between probe attempts.
+        download_attempts: Download attempts, including the first, for failures
+            classified transient.
+
+            **A probe succeeding does not mean the download will.** Extraction
+            runs again at the start of a download, and some extractors fail a
+            noticeable fraction of the time for no reason the caller can see -
+            TikTok's web path measured 6 successes in 8 from this device. With
+            no retry here, a quarter of otherwise-valid links failed outright,
+            which is exactly the "some work and some do not" that is impossible
+            to diagnose from the outside.
+
+            Cheap where it matters: an extraction failure has transferred
+            nothing, and a failure later resumes rather than restarting, because
+            partial files are left in the lease between attempts.
         retries: Engine-level retries for a whole download.
         fragment_retries: Retries for one fragment of a fragmented format.
         extractor_retries: Retries while extracting metadata, **inside a single
@@ -353,6 +367,7 @@ class DownloadSettings(_ConfigSection):
     socket_timeout_seconds: float = Field(default=30.0, gt=0)
     probe_attempts: int = Field(default=4, ge=1, le=10)
     probe_backoff_seconds: float = Field(default=3.0, ge=0)
+    download_attempts: int = Field(default=3, ge=1, le=6)
     retries: int = Field(default=3, ge=0, le=20)
     fragment_retries: int = Field(default=5, ge=0, le=50)
     extractor_retries: int = Field(default=5, ge=0, le=10)

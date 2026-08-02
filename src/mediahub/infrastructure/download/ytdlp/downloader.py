@@ -416,7 +416,20 @@ class YtDlpDownloader:
                     url=validated.value,
                 )
 
-            info = await self._with_egress_fallback(run, host=validated.host)
+            # Retried for the same reason a probe is, and it was missing here:
+            # extraction runs again at the start of every download, and some
+            # extractors fail a noticeable share of the time for no visible
+            # reason. Without this a flaky quarter of attempts reached the user
+            # as a flat failure - "some links work and some do not", with
+            # nothing to tell them apart.
+            info = await retry_async(
+                lambda: self._with_egress_fallback(run, host=validated.host),
+                schedule=RetrySchedule(
+                    attempts=self._settings.download_attempts,
+                    base_delay_seconds=self._settings.probe_backoff_seconds,
+                ),
+                description=f"download {validated.host}",
+            )
             bridge.stage(DownloadStage.VERIFYING)
             result = self._build_result(
                 request=request,

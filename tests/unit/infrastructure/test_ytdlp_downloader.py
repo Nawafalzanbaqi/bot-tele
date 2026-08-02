@@ -18,6 +18,7 @@ from mediahub.application.common.cancellation import CancellationSource
 from mediahub.application.download.errors import (
     ConnectionBlockedError,
     DownloadCancelledError,
+    DownloadError,
     DownloadTimeoutError,
     LiveSourceNotAllowedError,
     MetadataUnavailableError,
@@ -634,3 +635,86 @@ class TestEgressIsUsedOnlyWhereItIsNeeded:
 
         with pytest.raises(ConnectionBlockedError):
             await downloader.probe(URL)
+
+
+class TestADownloadSurvivesAFlakyExtractor:
+    """A probe succeeding does not mean the download will.
+
+    Extraction runs again when the download starts, and some extractors fail a
+    measurable share of the time for no visible reason: TikTok's web path was
+    measured at 6 successes in 8 from the device this runs on. Without a retry
+    here a quarter of perfectly good links failed outright, which from the
+    outside is indistinguishable from "this link is broken".
+    """
+
+    @staticmethod
+    def _settings(**overrides: object) -> DownloadSettings:
+        base: dict[str, object] = {
+            "enabled": True,
+            "probe_attempts": 1,
+            "probe_backoff_seconds": 0.0,
+            "progress_interval_seconds": 0.0,
+        }
+        base.update(overrides)
+        return DownloadSettings(**base)  # type: ignore[arg-type]
+
+    def _flaky_factory(self, failures: int) -> tuple[Callable[..., FakeYoutubeDL], list[int]]:
+        """Return a factory that fails the first ``failures`` calls."""
+        calls: list[int] = []
+
+        def factory(options: Mapping[str, Any]) -> FakeYoutubeDL:
+            calls.append(1)
+            failing = len(calls) <= failures
+            return FakeYoutubeDL(
+                options,
+                info=None if failing else video_info(),
+                error=RuntimeError("Unexpected response from webpage request") if failing else None,
+                script=() if failing else writes("abc123.mp4", 2048),
+            )
+
+        return factory, calls
+
+    async def test_a_transient_extraction_failure_is_retried(self, scope: WorkspaceScope) -> None:
+        factory, calls = self._flaky_factory(failures=2)
+        downloader = YtDlpDownloader(
+            self._settings(download_attempts=3),
+            url_policy=UrlPolicy(),
+            address_guard=None,
+            youtube_dl_factory=factory,
+        )
+
+        result = await downloader.fetch(
+            DownloadRequest(url=URL, selection=FormatSelection.best()), scope
+        )
+
+        assert len(calls) == 3, "it must keep trying while attempts remain"
+        assert result.primary.size_bytes == 2048
+
+    async def test_it_gives_up_after_the_configured_attempts(self, scope: WorkspaceScope) -> None:
+        factory, calls = self._flaky_factory(failures=99)
+        downloader = YtDlpDownloader(
+            self._settings(download_attempts=2),
+            url_policy=UrlPolicy(),
+            address_guard=None,
+            youtube_dl_factory=factory,
+        )
+
+        with pytest.raises(DownloadError):
+            await downloader.fetch(
+                DownloadRequest(url=URL, selection=FormatSelection.best()), scope
+            )
+
+        assert len(calls) == 2
+
+    async def test_a_permanent_failure_is_not_retried(self, scope: WorkspaceScope) -> None:
+        """A private video fails identically on the second attempt."""
+        downloader = build(
+            self._settings(download_attempts=3), error=RuntimeError("This video is private")
+        )
+
+        with pytest.raises(MetadataUnavailableError):
+            await downloader.fetch(
+                DownloadRequest(url=URL, selection=FormatSelection.best()), scope
+            )
+
+        assert len(FakeYoutubeDL.instances) == 1, "retrying a refusal only delays the answer"
