@@ -49,7 +49,16 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # It is still *pinned by the image*, never self-updating at runtime - a
 # downloader that rewrites itself on an unattended device is a supply chain with
 # no review step. Rebuilding is the update mechanism.
-RUN python -m pip install --upgrade --pre yt-dlp
+#
+# The `curl-cffi` extra is not optional in practice. Without it yt-dlp has **no
+# impersonation targets at all**, and a growing number of extractors simply
+# refuse to run: Dailymotion says so outright, and TikTok, Instagram and
+# Facebook sit behind bot walls that fingerprint the TLS handshake and the
+# HTTP/2 settings frame. A plain Python client is identifiable no matter what
+# User-Agent it claims, which is why those sites answer with a challenge page
+# instead of the media. curl_cffi presents a real browser's fingerprint, and it
+# is the difference between "unable to extract" and a download.
+RUN python -m pip install --upgrade --pre "yt-dlp[default,curl-cffi]"
 
 # --------------------------------------------------------------------------- #
 # Development                                                                  #

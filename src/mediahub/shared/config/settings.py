@@ -302,6 +302,16 @@ class DownloadSettings(_ConfigSection):
             being logged in as whoever exported it. Mount it read-only, keep it
             at mode 600, and export from an account whose loss would be an
             inconvenience rather than a catastrophe.
+        proxy: Optional proxy for every outbound request, e.g.
+            ``socks5://127.0.0.1:1080`` or ``http://gateway:3128``.
+
+            This is the only setting that answers a **network-level block**,
+            which is a distinct failure from anything else in this module and
+            looks nothing like it: DNS resolves, the TCP connection opens, and
+            the TLS handshake is then reset by something in the path that read
+            the hostname. No cookie, retry or engine update changes that,
+            because the traffic never reaches the site. Sending it through a
+            proxy on the far side of the filter is what changes it.
     """
 
     enabled: bool = False
@@ -321,6 +331,7 @@ class DownloadSettings(_ConfigSection):
     rate_limit_bytes_per_second: int | None = Field(default=None, ge=1)
     user_agent: str | None = None
     cookies_file: Path | None = None
+    proxy: str | None = None
 
 
 class WorkerSettings(_ConfigSection):

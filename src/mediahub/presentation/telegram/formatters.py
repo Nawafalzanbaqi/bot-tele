@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
+from mediahub.application.credentials.ports import SESSION_COOKIES
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
@@ -58,6 +60,14 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
         "The post is probably there — the site just will not show it to a "
         "logged-out visitor."
     ),
+    "no_playable_media": (
+        "🖼 That post has no video or audio in it — it is photos only.\n\n"
+        "My download engine fetches video and audio streams. Still images in an "
+        "X, Instagram or TikTok post are never offered as one, so there is "
+        "nothing for it to take.\n\n"
+        "If you want the picture, open the post, tap the image, copy the image's "
+        "own link and send me that — a direct image link works."
+    ),
     "geo_restricted": (
         "🌍 This is not published in this device's country.\n\n"
         "Cookies will not help; the block is on where the machine is."
@@ -65,6 +75,15 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "content_removed": (
         "🗑 That no longer exists — deleted, suspended, or the link is wrong.\n\n"
         "Check the link opens in your own browser."
+    ),
+    "connection_blocked": (
+        "🚧 The connection to that site was cut before it sent anything.\n\n"
+        "This is not the site being busy — the connection opens and is then "
+        "closed immediately, every time. That pattern means something in the "
+        "network between this device and the site is blocking it, usually the "
+        "internet provider.\n\n"
+        "Nothing I can change on this end fixes it. Routing the Pi's traffic "
+        "through a VPN or proxy would — set MEDIAHUB_DOWNLOAD__PROXY."
     ),
     "rate_limited": (
         "⏳ The site is asking me to slow down. Wait a few minutes and send it " "again."
@@ -348,29 +367,85 @@ def render_source_failure(code: str, *, url: str, cookies: CookieSummary | None)
             particular site is not covered by it.
     """
     base = render_error(code)
+    site = _host_of(url)
+
+    if code == "no_playable_media":
+        return _render_no_playable_media(base, site=site, cookies=cookies)
+
     certain = code == "authentication_required"
     if not certain and (code not in _SESSION_FAILURES or not _needs_session(url)):
         return base
+    return f"{base}\n\n{_session_advice(site, cookies)}"
 
+
+def _session_advice(site: str, cookies: CookieSummary | None) -> str:
+    """Return the one instruction that actually applies to this jar.
+
+    Four states, four different answers, and giving the wrong one wastes real
+    time: no jar at all, a jar that has lapsed, a jar that covers other sites,
+    and - the invisible one - a jar that lists this site but carries no login
+    session for it.
+    """
     if cookies is None:
-        return f"{base}\n\n{_ADVICE_NO_JAR}"
+        return _ADVICE_NO_JAR
     if _has_lapsed(cookies):
         when = f"{cookies.earliest_expiry:%Y-%m-%d}" if cookies.earliest_expiry else "recently"
         return (
-            f"{base}\n\n⚠️ Your stored cookies expired on {when}. Send me a "
-            "fresh export from a signed-in browser."
+            f"⚠️ Your stored cookies expired on {when}. Send me a fresh export "
+            "from a signed-in browser."
         )
-    site = _host_of(url)
     if site and not _covered_by(cookies, site):
         covered = ", ".join(cookies.domains[:4]) or "nothing"
         return (
-            f"{base}\n\nMy stored cookies cover {covered} — not {site}. Export "
-            f"a cookies.txt while {site} is open and send it to me."
+            f"My stored cookies cover {covered} — not {site}. Export a "
+            f"cookies.txt while {site} is open and send it to me."
+        )
+    # Covered but not signed in. This is the failure that otherwise has no
+    # explanation at all: the jar lists the site, reports a healthy cookie
+    # count, and holds nothing that says who you are - which is what an export
+    # that skipped httpOnly cookies produces. Everything looks right and
+    # nothing works.
+    if site and not _is_signed_in(cookies, site):
+        return (
+            f"⚠️ My cookies for {site} have no login session in them. The export "
+            "listed the site but left out the sign-in cookie — that usually "
+            "means the extension was set to skip httpOnly cookies. Export again "
+            "with those included, while signed in."
         )
     return (
-        f"{base}\n\nMy cookies for this site may have stopped working. Send a "
-        "fresh export, or /cookies to see what is stored."
+        "My cookies for this site may have stopped working. Send a fresh "
+        "export, or /cookies to see what is stored."
     )
+
+
+def _render_no_playable_media(base: str, *, site: str, cookies: CookieSummary | None) -> str:
+    """Add the one caveat that "no video in this post" genuinely carries.
+
+    Session state changes the *meaning* of this failure rather than the advice.
+    Signed in, it is simply a photo post and there is nothing to fix. Signed
+    out, a restricted video looks exactly the same from here - so the
+    possibility is named once, without pretending to know which it was.
+    """
+    if site and _needs_session(site) and not _is_signed_in(cookies, site):
+        return (
+            f"{base}\n\n⚠️ I also have no signed-in session for {site}. If you "
+            "expected a video here, a restricted one would look the same — "
+            "send me a fresh cookies.txt and try again."
+        )
+    return base
+
+
+def _is_signed_in(cookies: CookieSummary | None, host: str) -> bool:
+    """Return whether a login session is stored for ``host``.
+
+    A platform whose sign-in cookie this system cannot name is treated as
+    signed in, so an unrecognised site never provokes advice about a cookie
+    nobody can check for.
+    """
+    if cookies is None:
+        return False
+    known = any(host == name or host.endswith(f".{name}") for name in SESSION_COOKIES)
+    return cookies.is_signed_in(host) if known else True
 
 
 _ADVICE_NO_JAR: Final[str] = (
@@ -424,12 +499,35 @@ def render_cookie_status(summary: CookieSummary | None) -> str:
         "🍪 *Sign-in cookies stored*",
         f"Cookies: {summary.cookie_count}",
         f"Sites: {_sites(summary)}",
+        _signed_in_line(summary),
         f"Updated: {summary.installed_at:%Y-%m-%d %H:%M} UTC",
         _expiry_line(summary),
         "",
         "Send a new file to replace it, or /cookies clear to remove it.",
     ]
     return "\n".join(line for line in lines if line is not None)
+
+
+def _signed_in_line(summary: CookieSummary) -> str:
+    """Report which platforms the jar can actually sign in to.
+
+    The distinction that matters and that a cookie count hides: a jar can list
+    a site and hold nothing that proves who you are. Naming the platforms that
+    are *not* signed in turns a story that silently refuses into something with
+    a visible cause, before anyone sends a link and waits.
+    """
+    known = [
+        platform
+        for platform in SESSION_COOKIES
+        if any(domain == platform or domain.endswith(f".{platform}") for domain in summary.domains)
+    ]
+    if not known:
+        return "Signed in: nothing this bot recognises"
+    missing = [platform for platform in known if platform not in summary.signed_in]
+    signed = ", ".join(summary.signed_in) if summary.signed_in else "none"
+    if not missing:
+        return f"Signed in: {signed}"
+    return f"Signed in: {signed}\n⚠️ No login session for: {', '.join(missing)}"
 
 
 def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:

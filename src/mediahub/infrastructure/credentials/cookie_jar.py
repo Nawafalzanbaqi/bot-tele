@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
+from mediahub.application.credentials.ports import SESSION_COOKIES
+
 HTTP_ONLY_PREFIX: Final[str] = "#HttpOnly_"
 """Marks a cookie the browser hides from scripts. Still a cookie, still valid."""
 
@@ -34,11 +36,13 @@ class ParsedJar:
         domains: Hosts covered, deduplicated, leading dots removed and sorted.
         earliest_expiry: The first cookie to lapse, or ``None`` when every
             cookie is a session cookie.
+        signed_in: The subset of ``domains`` whose session cookie is present.
     """
 
     cookie_count: int
     domains: tuple[str, ...]
     earliest_expiry: datetime | None
+    signed_in: tuple[str, ...] = ()
 
 
 def decode(content: bytes) -> str:
@@ -71,6 +75,7 @@ def parse(text: str) -> ParsedJar:
     count = 0
     domains: set[str] = set()
     expiries: list[datetime] = []
+    names_by_domain: dict[str, set[str]] = {}
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -90,7 +95,9 @@ def parse(text: str) -> ParsedJar:
             continue
 
         count += 1
-        domains.add(domain.lower())
+        lowered = domain.lower()
+        domains.add(lowered)
+        names_by_domain.setdefault(lowered, set()).add(fields[5].strip())
         expiry = _expiry(fields[4])
         if expiry is not None:
             expiries.append(expiry)
@@ -99,7 +106,24 @@ def parse(text: str) -> ParsedJar:
         cookie_count=count,
         domains=tuple(sorted(domains)),
         earliest_expiry=min(expiries) if expiries else None,
+        signed_in=_signed_in(names_by_domain),
     )
+
+
+def _signed_in(names_by_domain: dict[str, set[str]]) -> tuple[str, ...]:
+    """Return the platforms the jar actually carries a session for.
+
+    A cookie is credited to a platform when it sits on that host or beneath it,
+    because browsers export ``.instagram.com`` and ``www.instagram.com`` as
+    separate lines and the session cookie is only ever on one of them.
+    """
+    signed: set[str] = set()
+    for platform, required in SESSION_COOKIES.items():
+        for domain, names in names_by_domain.items():
+            if (domain == platform or domain.endswith(f".{platform}")) and names & set(required):
+                signed.add(platform)
+                break
+    return tuple(sorted(signed))
 
 
 def merge(existing: str, incoming: str) -> str:

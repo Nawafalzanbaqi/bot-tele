@@ -13,11 +13,13 @@ import pytest
 
 from mediahub.application.download.errors import (
     AuthenticationRequiredError,
+    ConnectionBlockedError,
     ContentRemovedError,
     DownloadFailedError,
     FormatUnavailableError,
     GeoRestrictedError,
     MetadataUnavailableError,
+    NoPlayableMediaError,
     ProviderError,
     RateLimitedError,
     UnsupportedProviderError,
@@ -261,7 +263,7 @@ class TestErrorClassification:
             ("HTTP Error 429: Too Many Requests", RateLimitedError),
             ("HTTP Error 503: Service Unavailable", ProviderError),
             ("The read operation timed out", ProviderError),
-            ("[Errno 104] Connection reset by peer", ProviderError),
+            ("[Errno 104] Connection reset by peer", ConnectionBlockedError),
             ("Something nobody has ever seen before", DownloadFailedError),
         ],
     )
@@ -375,16 +377,13 @@ class TestFailuresNameTheirCause:
     @pytest.mark.parametrize(
         ("message", "expected"),
         [
-            # X returns this for a tweet that plainly has a video. Read as
-            # "gone" it is the single most misleading message in the product.
-            ("No video could be found in this tweet", AuthenticationRequiredError),
             ("Unable to extract universal data for rehydration", AuthenticationRequiredError),
             ("Your IP address is blocked from accessing this post", AuthenticationRequiredError),
             ("NSFW tweet requires authentication", AuthenticationRequiredError),
             ("This account is private", AuthenticationRequiredError),
             ("Use --cookies-from-browser or --cookies", AuthenticationRequiredError),
         ],
-        ids=["x-no-video", "tiktok-rehydration", "tiktok-ip", "nsfw", "private", "yt-dlp-advice"],
+        ids=["tiktok-rehydration", "tiktok-ip", "nsfw", "private", "yt-dlp-advice"],
     )
     def test_session_gated_failures_are_recognised(
         self, message: str, expected: type[Exception]
@@ -407,12 +406,47 @@ class TestFailuresNameTheirCause:
     ) -> None:
         assert isinstance(classify(RuntimeError(message), url=SOURCE), expected)
 
-    def test_a_session_gate_outranks_a_removal_phrase(self) -> None:
-        """Order matters: several gates are worded as if the thing were missing."""
-        error = classify(RuntimeError("No video could be found in this tweet"), url=SOURCE)
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "No video could be found in this tweet",
+            "No video could be found in this post",
+            "No video formats found!",
+            "no formats found for this item",
+        ],
+        ids=["x-photo-tweet", "bluesky-photo-post", "pinterest-image-pin", "generic"],
+    )
+    def test_a_photo_only_post_is_not_reported_as_a_login_problem(self, message: str) -> None:
+        """The expensive misdiagnosis, and the reason this class exists.
 
-        assert isinstance(error, AuthenticationRequiredError)
-        assert not isinstance(error, ContentRemovedError)
+        Every one of these means the post was read and holds no stream. Calling
+        it "sign in required" sends someone to re-export cookies that were never
+        the problem; calling it "gone" sends them to re-check a link that is
+        fine; calling it "that quality is unavailable" sends them to a list of
+        qualities that is empty.
+        """
+        error = classify(RuntimeError(message), url=SOURCE)
+
+        assert isinstance(error, NoPlayableMediaError)
+        assert not isinstance(error, AuthenticationRequiredError | ContentRemovedError)
+        assert not error.is_retryable
+
+    def test_a_reset_connection_is_not_the_site_being_busy(self) -> None:
+        """DNS fine, TCP fine, handshake killed - that is the path, not the site.
+
+        Reported as an ordinary transient failure it becomes "the site is having
+        trouble, try later", which is wrong in a way that costs days: it will
+        never succeed, because the traffic is not reaching the site at all.
+        """
+        error = classify(
+            OSError("Unable to download webpage: [Errno 104] Connection reset by peer"),
+            url=SOURCE,
+        )
+
+        assert isinstance(error, ConnectionBlockedError)
+        # Still retryable: one reset really can be noise. It is the explanation
+        # that differs, not the retry policy.
+        assert error.is_retryable
 
     def test_rate_limiting_stays_transient(self) -> None:
         """It is the one refusal where waiting is the whole instruction."""

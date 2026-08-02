@@ -126,6 +126,40 @@ class ContentRemovedError(DownloadError):
     kind: ClassVar[FailureKind] = FailureKind.PERMANENT
 
 
+class NoPlayableMediaError(DownloadError):
+    """The post was read successfully and holds nothing this engine can fetch.
+
+    Almost always a **photo-only post**: X, Instagram and TikTok all report this
+    as "no video could be found", which reads like a fault and is not one. The
+    engine downloads video and audio; the still images in such a post are never
+    offered to it as a stream, so there is nothing to take.
+
+    Separate from :class:`AuthenticationRequiredError` because the two demand
+    opposite responses. Reporting a photo post as "sign in required" sends
+    someone to re-export cookies that were never the problem, and they end the
+    exercise with a working session and the same message.
+    """
+
+    code: ClassVar[str] = "no_playable_media"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
+class ConnectionBlockedError(DownloadError):
+    """The connection opened and was then cut before any data came back.
+
+    Transient by classification, because one reset really can be noise. It has
+    its own code because the *explanation* differs from every other transient
+    failure: a busy site answers slowly or returns a 5xx, it does not accept a
+    TCP connection and then reset the handshake. When that repeats, something in
+    the network path is reading the destination and closing the connection, and
+    no retry, cookie or engine update reaches past it - only sending the traffic
+    somewhere else does.
+    """
+
+    code: ClassVar[str] = "connection_blocked"
+    kind: ClassVar[FailureKind] = FailureKind.TRANSIENT
+
+
 class RateLimitedError(DownloadError):
     """The platform is refusing for now because we asked too often.
 

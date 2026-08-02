@@ -25,12 +25,14 @@ from typing import TYPE_CHECKING, Final
 
 from mediahub.application.download.errors import (
     AuthenticationRequiredError,
+    ConnectionBlockedError,
     ContentRemovedError,
     DownloadError,
     DownloadFailedError,
     FormatUnavailableError,
     GeoRestrictedError,
     MetadataUnavailableError,
+    NoPlayableMediaError,
     ProviderError,
     RateLimitedError,
     UnsupportedProviderError,
@@ -47,25 +49,43 @@ _RETRY_AFTER_PATTERN: Final[re.Pattern[str]] = re.compile(
 # ones. Each entry is (needles, error factory).
 _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...]] = (
     (("unsupported url", "no suitable extractor", "is not a valid url"), UnsupportedProviderError),
+    # A rendition that was asked for and does not exist - a stale format id from
+    # an old probe. Deliberately *not* "no formats found", which means the
+    # source offers nothing at all and is classified below: telling someone
+    # their quality choice was unavailable, when the post simply has no video in
+    # it, sends them to pick a different quality from a list that is empty.
     (
-        (
-            "requested format is not available",
-            "requested format not available",
-            "no video formats found",
-            "no formats found",
-        ),
+        ("requested format is not available", "requested format not available"),
         FormatUnavailableError,
     ),
-    # Session-gated. These phrases are what the platforms actually say when
-    # they are hiding something from a signed-out visitor, and several of them
-    # sound like the content is missing rather than withheld - X's "no video
-    # could be found in this tweet" is returned for a tweet that plainly has
-    # one. Reading them as "gone" is what makes this failure so confusing, so
-    # they are matched *before* the removal markers below.
+    # A post that was read successfully and simply has no stream in it. This is
+    # what every one of these platforms says about a **photo-only post**, and
+    # the wording invites two wrong readings: that the post is gone, or that a
+    # sign-in would reveal it. Neither is true, and the second is the expensive
+    # one - it sends someone to re-export cookies that were never the problem.
+    #
+    # Matched before the session markers below, which is a reversal of what this
+    # table did previously. The old order was chosen because X returns this
+    # phrase to a signed-out visitor for a tweet that does have a video; but a
+    # signed-in session meets it far more often on ordinary photo posts, so
+    # reading it as an authentication failure is now wrong in the common case.
+    # The renderer restores the missing nuance from something this module cannot
+    # see: whether a session for that platform is actually stored.
     (
         (
             "no video could be found in this tweet",
             "no video could be found in this post",
+            "no video formats found",
+            "no formats found",
+            "no media found",
+            "there's no video in this post",
+        ),
+        NoPlayableMediaError,
+    ),
+    # Session-gated. These phrases are what the platforms actually say when
+    # they are hiding something from a signed-out visitor.
+    (
+        (
             "nsfw tweet requires authentication",
             "requested content is not available",
             "login required",
@@ -132,6 +152,22 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
 )
 """Checked before the generic transient list: "wait" is a useful
 instruction and "the site is having trouble" is not."""
+
+_RESET_MARKERS: Final[tuple[str, ...]] = (
+    "connection reset by peer",
+    "errno 104",
+    "econnreset",
+)
+"""A connection that opened and was then killed mid-handshake.
+
+Kept apart from the ordinary transient list because the honest explanation is
+different. A site under load answers slowly or returns a 5xx; it does not accept
+a TCP connection and then reset the TLS handshake. That pattern - DNS fine, TCP
+fine, handshake reset, every time - is something in the network path reading the
+hostname and cutting the connection, and no amount of retrying reaches past it.
+
+Still classified transient, because a single reset really can be noise. What
+changes is what the user is told after the retries are spent."""
 
 _TRANSIENT_MARKERS: Final[tuple[str, ...]] = (
     "temporarily unavailable",
@@ -247,9 +283,42 @@ def classify(exc: BaseException, *, url: str, provider: str | None = None) -> Do
         if any(needle in text for needle in needles):
             return factory(f"'{url}' cannot be retrieved: {detail}", provider=provider)
 
+    return _classify_transient(
+        names,
+        text,
+        url=url,
+        detail=detail,
+        provider=provider,
+        retry_after=retry_after,
+    )
+
+
+def _classify_transient(
+    names: set[str],
+    text: str,
+    *,
+    url: str,
+    detail: str,
+    provider: str | None,
+    retry_after: float | None,
+) -> DownloadError:
+    """Grade a failure that may resolve on its own.
+
+    All four outcomes are retryable; they differ only in what they let a caller
+    say afterwards, which is the whole value of separating them. "Wait a
+    moment", "something is blocking this connection" and "the site is having
+    trouble" send a person to three different places.
+    """
     if any(needle in text for needle in _RATE_LIMIT_MARKERS):
         return RateLimitedError(
             f"'{url}' is being rate limited: {detail}",
+            provider=provider,
+            retry_after_seconds=retry_after,
+        )
+
+    if any(needle in text for needle in _RESET_MARKERS):
+        return ConnectionBlockedError(
+            f"'{url}' was reset before any data arrived: {detail}",
             provider=provider,
             retry_after_seconds=retry_after,
         )

@@ -310,6 +310,10 @@ class FakeCookieStore:
             earliest_expiry=parsed.earliest_expiry,
             installed_at=datetime.now(UTC),
             size_bytes=len(content),
+            # Carried through, like the real store. Dropping it here would make
+            # every jar in these tests look signed out, and the advice the
+            # gateway gives would be tested against a state that cannot occur.
+            signed_in=parsed.signed_in,
         )
 
     async def describe(self) -> CookieSummary | None:

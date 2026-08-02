@@ -19,10 +19,34 @@ expiries are useful to a person and are not credentials.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from datetime import datetime
+
+
+SESSION_COOKIES: Final[dict[str, tuple[str, ...]]] = {
+    "instagram.com": ("sessionid",),
+    "tiktok.com": ("sessionid", "sid_tt"),
+    "x.com": ("auth_token",),
+    "twitter.com": ("auth_token",),
+    "facebook.com": ("c_user", "xs"),
+    "youtube.com": ("SID", "__Secure-3PSID"),
+    "reddit.com": ("reddit_session",),
+}
+"""The one cookie per platform that means "this jar is signed in".
+
+**Covering a domain is not the same as being signed in to it**, and the
+difference is invisible without this table: an export taken from a browser that
+merely visited Instagram carries a handful of anonymous cookies, installs
+cleanly, reports a healthy count and lists ``instagram.com`` among its domains -
+and still cannot open a story, because the session cookie was never in it.
+Extensions configured to skip httpOnly cookies produce exactly this, which is
+why the mistake is common and why nothing else about the jar reveals it.
+
+Here rather than in the adapter because two layers need it and neither owns it:
+the parser decides which platforms a jar covers, and the presentation layer
+decides whether to say so."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +64,12 @@ class CookieSummary:
             knowing the date turns that into a reminder rather than a mystery.
         installed_at: When the jar was stored.
         size_bytes: How large the file is.
+        signed_in: The platforms this jar actually carries a login session for.
+            **Not the same as ``domains``**: an export can list a site and hold
+            nothing that proves who you are, which is what a browser extension
+            configured to skip httpOnly cookies produces. That jar installs
+            cleanly and still cannot open a story, and no other field here would
+            show it.
     """
 
     cookie_count: int
@@ -47,11 +77,16 @@ class CookieSummary:
     earliest_expiry: datetime | None
     installed_at: datetime
     size_bytes: int
+    signed_in: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
         """Return whether the jar holds no usable cookies."""
         return self.cookie_count == 0
+
+    def is_signed_in(self, host: str) -> bool:
+        """Return whether the jar holds a login session covering ``host``."""
+        return any(host == platform or host.endswith(f".{platform}") for platform in self.signed_in)
 
 
 class CookieStore(Protocol):

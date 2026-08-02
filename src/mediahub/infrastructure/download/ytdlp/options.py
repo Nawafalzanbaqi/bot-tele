@@ -73,6 +73,8 @@ def base_options(settings: DownloadSettings) -> dict[str, Any]:
         # that hides media from an anonymous session hides it at *probe* time,
         # which is where the failure is reported as "no video in this post".
         options["cookiefile"] = str(settings.cookies_file)
+    if settings.proxy:
+        options["proxy"] = settings.proxy
     return options
 
 

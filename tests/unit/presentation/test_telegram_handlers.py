@@ -28,7 +28,10 @@ from mediahub.application.download.dto import (
     QualityOption,
     SourceSummary,
 )
-from mediahub.application.download.errors import MetadataUnavailableError
+from mediahub.application.download.errors import (
+    MetadataUnavailableError,
+    NoPlayableMediaError,
+)
 from mediahub.application.download.ports import DownloadProgress, DownloadStage
 from mediahub.domain.access.enums import Role
 from mediahub.domain.media.enums import MediaType
@@ -818,6 +821,42 @@ class TestFailureExplainsItself:
             "not x.com" in messenger.last_text.lower()
             or "may have stopped" in messenger.last_text.lower()
         )
+
+    async def test_a_jar_that_covers_the_site_but_holds_no_session_says_so(self) -> None:
+        """The failure that otherwise has no explanation at all.
+
+        The jar lists x.com, reports a healthy cookie count and contains
+        nothing that says who you are - which is what an export that skipped
+        httpOnly cookies produces. Everything looks right and nothing works, and
+        no other message in the product would tell you why.
+        """
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = (
+            b"# Netscape HTTP Cookie File\n"
+            b"x.com\tTRUE\t/\tTRUE\t2000000000\tguest_id\tv1%3A123456789\n"
+        )
+        probe = FakeProbe(error=MetadataUnavailableError("nope"))
+        handlers, _ = build(messenger, probe=probe)
+        await handle(handlers, document_update())
+
+        await handle(handlers, message_update("https://x.com/someone/status/123", update_id=31))
+
+        assert "no login session" in messenger.last_text.lower()
+        assert "httponly" in messenger.last_text.lower()
+
+    async def test_a_photo_only_post_is_not_blamed_on_cookies(self) -> None:
+        """A signed-in jar means the post really is just photos - say that."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        probe = FakeProbe(error=NoPlayableMediaError("no video could be found in this tweet"))
+        handlers, _ = build(messenger, probe=probe)
+        await handle(handlers, document_update())
+
+        await handle(handlers, message_update("https://x.com/someone/status/123", update_id=32))
+
+        text = messenger.last_text.lower()
+        assert "photos only" in text
+        assert "cookies.txt" not in text, "a signed-in session makes cookie advice noise"
 
     async def test_an_ordinary_site_gets_no_cookie_advice(self) -> None:
         """Advice that appears everywhere is advice nobody reads."""

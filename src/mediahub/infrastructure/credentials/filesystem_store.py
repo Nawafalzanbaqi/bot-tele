@@ -103,6 +103,7 @@ class FilesystemCookieStore:
             cookie_count=parsed.cookie_count,
             domains=parsed.domains,
             earliest_expiry=parsed.earliest_expiry,
+            signed_in=parsed.signed_in,
             installed_at=datetime.now(UTC),
             size_bytes=len(payload),
         )
@@ -121,6 +122,7 @@ class FilesystemCookieStore:
             cookie_count=parsed.cookie_count,
             domains=parsed.domains,
             earliest_expiry=parsed.earliest_expiry,
+            signed_in=parsed.signed_in,
             installed_at=datetime.fromtimestamp(self._path.stat().st_mtime, tz=UTC),
             size_bytes=len(content),
         )
