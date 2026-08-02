@@ -1,9 +1,16 @@
 # ---------------------------------------------------------------------------
-# MediaHub - production-shaped stack.
+# MediaHub - PostgreSQL-backed stack, for a host that already runs one.
 #
 #   api       FastAPI application (non-root, health-checked)
 #   postgres  system of record
-#   redis     reserved for the future download queue / worker (see ARCHITECTURE)
+#
+# **For the Raspberry Pi, use docker-compose.pi.yml instead**, which runs on
+# SQLite with no database service at all (ADR-0006).
+#
+# Redis was removed: it was provisioned for a queue that ADR-0008 then decided
+# to put in SQLite, so it was 50-200 MB of RAM, an extra failure domain and
+# extra card writes in exchange for nothing. Reserving a *port* costs nothing;
+# reserving a *service* costs on every deployment until the day it is used.
 #
 # Local development overrides live in docker-compose.override.yml, which Compose
 # merges automatically. For a production-like run use:
@@ -50,8 +57,6 @@ services:
       start_period: 20s
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - mediahub

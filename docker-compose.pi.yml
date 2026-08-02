@@ -120,8 +120,14 @@ services:
     restart: unless-stopped
     profiles: ["localapi"]
     environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
+      # Empty defaults rather than `:?` guards: Compose interpolates *every*
+      # service in the file, including ones behind a profile that is not
+      # active, so a required-variable guard here would stop the whole stack
+      # from parsing for anyone not using the local API server. The image
+      # itself refuses to start on an empty value, which is the right place
+      # for that complaint.
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       TELEGRAM_LOCAL: "1"
     volumes:
       - botapi:/var/lib/telegram-bot-api
