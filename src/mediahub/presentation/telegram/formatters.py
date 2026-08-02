@@ -277,6 +277,67 @@ def _escape(text: str) -> str:
 # credential.
 
 
+COOKIE_HOSTS: Final[frozenset[str]] = frozenset(
+    {
+        "x.com",
+        "twitter.com",
+        "tiktok.com",
+        "vm.tiktok.com",
+        "instagram.com",
+        "facebook.com",
+        "fb.watch",
+        "threads.net",
+        "reddit.com",
+    }
+)
+"""Hosts that routinely refuse a logged-out visitor.
+
+Used only to make a failure explain itself. Without this the user sees "I could
+not read that link", concludes the bot is broken, and has no way to discover
+that thirty seconds of exporting cookies would fix it.
+"""
+
+_SESSION_FAILURES: Final[frozenset[str]] = frozenset(
+    {"metadata_unavailable", "unsupported_provider", "download_failed", "provider_error"}
+)
+"""Codes a missing session produces. All of them also have innocent causes,
+which is why the hint is offered rather than asserted."""
+
+
+def render_source_failure(code: str, *, url: str, cookies_installed: bool) -> str:
+    """Render a probe failure, adding why it may have happened.
+
+    Args:
+        code: The stable error code.
+        url: What the user sent, used only to recognise the host.
+        cookies_installed: Whether a jar is already stored. When one is, the
+            advice changes from "add cookies" to "yours may have lapsed",
+            which is the far more likely explanation and a different action.
+    """
+    base = render_error(code)
+    if code not in _SESSION_FAILURES or not _needs_session(url):
+        return base
+    if cookies_installed:
+        return (
+            f"{base}\n\nThis site needs a signed-in session and the stored "
+            "cookies may have lapsed. Send me a fresh cookies.txt export, or "
+            "use /cookies to see what is stored."
+        )
+    return (
+        f"{base}\n\nThis site shows nothing to a logged-out visitor. Export a "
+        "Netscape-format cookies.txt from a browser that is signed in and send "
+        "it to me — see /help."
+    )
+
+
+def _needs_session(url: str) -> bool:
+    """Return whether a URL's host is one that refuses logged-out visitors."""
+    authority = url.split("//", maxsplit=1)[-1]
+    host = authority.split("/", maxsplit=1)[0].split("?", maxsplit=1)[0].lower()
+    host = host.removeprefix("www.")
+    return any(host == known or host.endswith(f".{known}") for known in COOKIE_HOSTS)
+
+
 def render_cookie_status(summary: CookieSummary | None) -> str:
     """Describe the stored cookie jar."""
     if summary is None:

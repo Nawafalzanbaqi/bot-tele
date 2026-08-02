@@ -222,7 +222,16 @@ class TelegramHandlers:
             await self._say(intent, formatters.render_help())
             return
 
-        summary = await self._services.probe_source.execute(ProbeSourceQuery(url=text))
+        try:
+            summary = await self._services.probe_source.execute(ProbeSourceQuery(url=text))
+        except (DomainError, ApplicationError) as exc:
+            # Caught here rather than left to the generic handler so the reply
+            # can name the *likely* cause. On the sites that refuse logged-out
+            # visitors, "I could not read that link" reads as a broken bot and
+            # gives the user nothing to act on.
+            await self._say(intent, await self._explain_failure(exc.code, url=text))
+            return
+
         session = self._services.sessions.create(
             owner=principal.identity, chat_id=intent.chat_id, summary=summary
         )
@@ -250,6 +259,13 @@ class TelegramHandlers:
             return
         if not offerable:
             self._services.sessions.discard(session.token)
+
+    async def _explain_failure(self, code: str, *, url: str) -> str:
+        """Render a probe failure together with what is likely behind it."""
+        installed = False
+        with contextlib.suppress(Exception):
+            installed = await self._services.describe_cookies.execute() is not None
+        return formatters.render_source_failure(code, url=url, cookies_installed=installed)
 
     async def _on_document(self, intent: Intent, principal: Principal) -> None:
         """Treat an attached file as a cookie jar, and nothing else.

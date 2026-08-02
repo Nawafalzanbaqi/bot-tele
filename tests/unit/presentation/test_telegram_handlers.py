@@ -782,3 +782,61 @@ class TestCookieUpload:
         await handle(handlers, message_update("/cookies clear", update_id=21))
 
         assert "removed" in messenger.last_text
+
+
+class TestFailureExplainsItself:
+    """A refusal from a site that needs a session must say so.
+
+    "I could not read that link" reads as a broken bot and gives the user
+    nothing to act on, when thirty seconds of exporting cookies would fix it.
+    """
+
+    async def test_a_session_site_failure_suggests_cookies(self) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe(error=MetadataUnavailableError("nope"))
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update("https://x.com/someone/status/123"))
+
+        assert "logged-out visitor" in messenger.last_text
+
+    async def test_with_cookies_stored_it_suggests_they_lapsed(self) -> None:
+        """A different cause needs a different action."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        probe = FakeProbe(error=MetadataUnavailableError("nope"))
+        handlers, _ = build(messenger, probe=probe)
+        await handle(handlers, document_update())
+
+        await handle(handlers, message_update("https://x.com/someone/status/123", update_id=30))
+
+        assert "may have lapsed" in messenger.last_text
+
+    async def test_an_ordinary_site_gets_no_cookie_advice(self) -> None:
+        """Advice that appears everywhere is advice nobody reads."""
+        messenger = FakeMessenger()
+        probe = FakeProbe(error=MetadataUnavailableError("nope"))
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update("https://example.com/talk.mp4"))
+
+        assert "cookies" not in messenger.last_text.lower()
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.tiktok.com/@a/video/1",
+            "https://vm.tiktok.com/ABC/",
+            "https://twitter.com/a/status/1",
+            "https://www.instagram.com/reel/abc/",
+        ],
+        ids=["tiktok", "tiktok-short", "twitter", "instagram"],
+    )
+    async def test_the_other_session_sites_are_recognised(self, url: str) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe(error=MetadataUnavailableError("nope"))
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update(url))
+
+        assert "cookies.txt" in messenger.last_text
