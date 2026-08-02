@@ -299,7 +299,15 @@ class TelegramHandlers:
             content, requested_by=str(principal.identity)
         )
         removed = await self._forget_upload(intent)
-        await self._say(intent, formatters.render_cookies_installed(summary, removed=removed))
+        # Deliberately not a *reply*. The message being replied to is the upload,
+        # and it has just been deleted on purpose - Telegram answers a reply to a
+        # missing message with 400, so the confirmation would fail and the user
+        # would be told the whole thing went wrong after it had succeeded.
+        await self._services.messenger.send_message(
+            chat_id=intent.chat_id,
+            text=formatters.render_cookies_installed(summary, removed=removed),
+            reply_to_message_id=None if removed else intent.message_id,
+        )
 
     async def _forget_upload(self, intent: Intent) -> bool:
         """Delete the message that carried a credential, if Telegram allows."""

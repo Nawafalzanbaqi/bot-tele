@@ -840,3 +840,31 @@ class TestFailureExplainsItself:
         await handle(handlers, message_update(url))
 
         assert "cookies.txt" in messenger.last_text
+
+    async def test_the_confirmation_is_not_a_reply_to_the_deleted_upload(self) -> None:
+        """Telegram answers a reply to a missing message with 400.
+
+        The upload is deleted on purpose, so replying to it made the
+        confirmation fail and told the user everything had gone wrong after it
+        had in fact succeeded.
+        """
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update(message_id=9))
+
+        confirmation = messenger.sent[-1]
+        assert "Sign-in cookies updated" in confirmation.text
+        assert confirmation.reply_to_message_id is None
+
+    async def test_it_still_replies_when_the_upload_survived(self) -> None:
+        """With the message still there, threading the answer to it is useful."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        messenger.delete_allowed = False
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update(message_id=9))
+
+        assert messenger.sent[-1].reply_to_message_id == 9
