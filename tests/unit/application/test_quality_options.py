@@ -163,3 +163,88 @@ class TestSelectionFor:
         options = build_quality_options(metadata(audio_formats=(AudioFormat(format_id="a"),)))
 
         assert not selection_for(AUDIO_KEY, options, allow_merge=True).allow_merge
+
+
+class TestSizesAreDeliveredSizes:
+    """The number on a button must be the number that arrives.
+
+    Above roughly 720p a platform stops offering a muxed file, so the rendition
+    behind those rungs is video *only* and an audio track is attached to it on
+    the way. Reporting the video stream alone understates exactly the rungs
+    people reach for, and a size that cannot be trusted is worse than no size,
+    because it is what they plan around.
+    """
+
+    def test_a_video_only_rung_includes_the_audio_it_will_be_given(self) -> None:
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080, 40_000_000),),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5_000_000),),
+            ),
+            allow_merge=True,
+        )
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 45_000_000
+
+    def test_a_rung_that_already_carries_audio_is_not_inflated(self) -> None:
+        muxed = VideoFormat(
+            format_id="v720", height=720, filesize_bytes=20_000_000, audio_codec="mp4a"
+        )
+        options = build_quality_options(
+            metadata(
+                video_formats=(muxed,),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5_000_000),),
+            ),
+            allow_merge=True,
+        )
+
+        assert next(o for o in options if o.key == "h720").approx_bytes == 20_000_000
+
+    def test_without_merging_nothing_is_added(self) -> None:
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080, 40_000_000),),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5_000_000),),
+            )
+        )
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 40_000_000
+
+    def test_a_rung_is_dropped_once_the_audio_pushes_it_over_the_ceiling(self) -> None:
+        """The check that failed in production: 48 MB of video fits 50, 53 does not."""
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080, 48_000_000), video(720, 20_000_000)),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5_000_000),),
+            ),
+            max_bytes=50_000_000,
+            allow_merge=True,
+        )
+
+        assert [o.key for o in options if o.height] == ["h720"]
+
+    def test_an_unknown_size_stays_unknown_rather_than_becoming_the_audio_size(self) -> None:
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080),),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=5_000_000),),
+            ),
+            allow_merge=True,
+        )
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes is None
+
+    def test_the_smallest_audio_is_assumed_not_the_largest(self) -> None:
+        """The engine's fallback takes what fits; an estimate should be beatable."""
+        options = build_quality_options(
+            metadata(
+                video_formats=(video(1080, 40_000_000),),
+                audio_formats=(
+                    AudioFormat(format_id="hi", filesize_bytes=9_000_000),
+                    AudioFormat(format_id="lo", filesize_bytes=3_000_000),
+                ),
+            ),
+            allow_merge=True,
+        )
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 43_000_000

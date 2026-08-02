@@ -7,6 +7,7 @@ are tested exhaustively here without an engine, a network or a filesystem.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +18,7 @@ from mediahub.application.download.errors import (
     ProviderError,
     UnsupportedProviderError,
 )
-from mediahub.application.download.ports import FormatSelection
+from mediahub.application.download.ports import DownloadRequest, FormatSelection
 from mediahub.domain.download.enums import FailureKind
 from mediahub.domain.media.enums import MediaType
 from mediahub.infrastructure.download.ytdlp.errors import classify, extract_retry_after
@@ -28,6 +29,8 @@ from mediahub.infrastructure.download.ytdlp.mapping import (
     to_selected_format,
     to_thumbnails,
 )
+from mediahub.infrastructure.download.ytdlp.options import build_download_options
+from mediahub.shared.config.settings import DownloadSettings
 from tests.support.ytdlp_fakes import playlist_info, video_info
 
 pytestmark = pytest.mark.unit
@@ -304,3 +307,49 @@ class TestErrorClassification:
         error = classify(Exception("HTTP Error 429, retry after 30"), url="u")
 
         assert error.retry_after_seconds == 30.0
+
+
+class TestPlayableOutput:
+    """The result has to open on the device it is sent to.
+
+    These pin the fix for a real report: 1080p arrived, was genuinely 1920x1080,
+    and would not play - AV1 video with Opus audio in a WebM container, which
+    most phone players and chat clients cannot decode. A newer codec is not a
+    better download if nothing renders it.
+    """
+
+    def test_a_compatible_merge_asks_for_h264_and_aac_first(self) -> None:
+        expression = build_format_expression(
+            FormatSelection.up_to_height(1080, allow_merge=True, prefer_compatible=True)
+        )
+
+        assert expression.startswith("bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]")
+
+    def test_it_still_falls_back_to_any_codec(self) -> None:
+        """A source with no H.264 must yield something rather than nothing."""
+        expression = build_format_expression(
+            FormatSelection.up_to_height(1080, allow_merge=True, prefer_compatible=True)
+        )
+
+        assert "/bv*[height<=1080]+ba" in expression
+        assert expression.endswith("/b")
+
+    def test_compatibility_is_opt_in(self) -> None:
+        """A destination that plays anything should not pay for the preference."""
+        expression = build_format_expression(FormatSelection.up_to_height(1080, allow_merge=True))
+
+        assert "avc1" not in expression
+        assert "mp4a" not in expression
+
+    def test_the_merged_container_is_mp4(self) -> None:
+        """WebM is what the streams arrive in and is not what may be delivered."""
+        options = build_download_options(
+            DownloadSettings(),
+            DownloadRequest(url="https://example.com/a"),
+            directory=Path("lease"),
+            format_expression="bv*+ba",
+            progress_hook=lambda _: None,
+            postprocessor_hook=lambda _: None,
+        )
+
+        assert options["merge_output_format"] == "mp4"

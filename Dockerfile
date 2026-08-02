@@ -39,6 +39,18 @@ COPY src ./src
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install .
 
+# yt-dlp separately, and from the pre-release channel, because it is the one
+# dependency whose correctness expires. Extractors track what platforms do, and
+# platforms change without notice: a month-old release fails on TikTok with
+# "unable to extract" and the fix is already published. Pinning it to the
+# quarterly stable means the bot is broken for weeks at a time on exactly the
+# sites people use most.
+#
+# It is still *pinned by the image*, never self-updating at runtime - a
+# downloader that rewrites itself on an unattended device is a supply chain with
+# no review step. Rebuilding is the update mechanism.
+RUN python -m pip install --upgrade --pre yt-dlp
+
 # --------------------------------------------------------------------------- #
 # Development                                                                  #
 # --------------------------------------------------------------------------- #

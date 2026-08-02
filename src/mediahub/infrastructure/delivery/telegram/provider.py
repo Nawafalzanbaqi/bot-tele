@@ -77,6 +77,9 @@ LOCAL_API_MAX_BYTES: Final[int] = 2 * 1024 * 1024 * 1024
 
 MAX_CAPTION_LENGTH: Final[int] = 1024
 
+MAX_THUMBNAIL_BYTES: Final[int] = 200 * 1024
+"""What Telegram accepts as a poster image, alongside "JPEG, and nothing else"."""
+
 
 class TelegramDeliveryProvider:
     """Sends artifacts to a Telegram conversation."""
@@ -155,9 +158,7 @@ class TelegramDeliveryProvider:
 
         _report(on_progress, DeliveryStage.PREPARING, 0, size)
         path = workspace.path_for(request.artifact.name)
-        thumbnail = (
-            workspace.path_for(request.thumbnail.name) if request.thumbnail is not None else None
-        )
+        thumbnail = self._poster(request, workspace)
 
         started = time.monotonic()
         with path.open("rb") as handle:
@@ -257,6 +258,28 @@ class TelegramDeliveryProvider:
             # The detail deliberately omits the path, the token and the
             # destination's own text: a delivery error is shown to a person.
             raise classify(exc, detail=request.kind.value) from exc
+
+    @staticmethod
+    def _poster(request: DeliveryRequest, workspace: WorkspaceScope) -> Path | None:
+        """Return the poster image, but only if Telegram will accept it.
+
+        Telegram takes **JPEG only**, under 200 kB. Engines commonly produce
+        WebP, which is smaller and better and which Telegram rejects. Sending it
+        anyway either fails the whole delivery or has the image silently
+        discarded, so it is dropped here instead - and the destination generates
+        its own poster from the video, which is what it does when none is given.
+        """
+        if request.thumbnail is None:
+            return None
+        name = request.thumbnail.name.lower()
+        if not name.endswith((".jpg", ".jpeg")):
+            logger.bind(provider=PROVIDER, thumbnail=request.thumbnail.name).debug(
+                "Poster image is not JPEG; letting the destination generate its own"
+            )
+            return None
+        if request.thumbnail.size_bytes > MAX_THUMBNAIL_BYTES:
+            return None
+        return workspace.path_for(request.thumbnail.name)
 
     def _chat_of(self, target: DeliveryTarget) -> str:
         """Return the conversation this target names, or refuse."""

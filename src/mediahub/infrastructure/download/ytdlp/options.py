@@ -43,10 +43,11 @@ def base_options(settings: DownloadSettings) -> dict[str, Any]:
         # security: never write a cache outside the workspace (yt-dlp otherwise
         # uses ~/.cache/yt-dlp).
         "cachedir": False,
-        # security: no shell, no external programs, no post-processing that
-        # could execute something. FFmpeg belongs to a different subsystem.
+        # security: no shell, and no *arbitrary* post-processing. The list is
+        # empty rather than absent so nothing this module did not ask for can
+        # run; yt-dlp's own merger is not on it and is invoked internally when
+        # a format expression names two streams.
         "postprocessors": [],
-        "prefer_ffmpeg": False,
         "exec_cmd": [],
         # security: do not pretend to be somewhere else. Bypassing geo-blocks is
         # a deliberate operator decision, not a default.
@@ -67,6 +68,11 @@ def base_options(settings: DownloadSettings) -> dict[str, Any]:
     }
     if settings.user_agent:
         options["http_headers"] = {"User-Agent": settings.user_agent}
+    if settings.cookies_file is not None:
+        # Presented to every source, on both probe and download - a platform
+        # that hides media from an anonymous session hides it at *probe* time,
+        # which is where the failure is reported as "no video in this post".
+        options["cookiefile"] = str(settings.cookies_file)
     return options
 
 
@@ -134,6 +140,13 @@ def build_download_options(
             # that declare a larger size, and the hook stops those that lie.
             "max_filesize": request.max_bytes,
             "concurrent_fragment_downloads": settings.concurrent_fragments,
+            # Where two streams are combined, the result is MP4. Without this
+            # yt-dlp keeps whichever container the streams came in - usually
+            # WebM - and the file arrives complete, at the right resolution, and
+            # refuses to play in a chat client. With H.264 and AAC selected
+            # first (see `format_selection`) this is a remux, not a re-encode:
+            # seconds on a Pi rather than minutes.
+            "merge_output_format": "mp4",
         }
     )
     if not request.allow_playlist:

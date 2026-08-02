@@ -241,6 +241,14 @@ class DownloadSettings(_ConfigSection):
             qualities, it makes them quietly resolve to the best already-muxed
             rendition instead, which on most platforms is 720p. The cost is CPU:
             on a Pi a long 1080p merge is minutes of it.
+        prefer_compatible_codecs: Prefer H.264 video and AAC audio over the
+            newest codecs a platform offers. **Leave this on for any destination
+            people watch things in.** The best streams are increasingly AV1 or
+            VP9 with Opus, which are smaller for the same resolution and which
+            phone players and chat clients largely cannot decode - so the file
+            arrives, is the right resolution, and does not play. It also keeps
+            the merge a remux rather than a re-encode, which on a Pi is seconds
+            instead of minutes.
         max_item_bytes: Hard ceiling per download, enforced while streaming.
         probe_timeout_seconds: Budget for a metadata probe.
         download_timeout_seconds: Wall-clock budget for one download.
@@ -259,10 +267,21 @@ class DownloadSettings(_ConfigSection):
         rate_limit_bytes_per_second: Optional bandwidth cap, so a download does
             not saturate a household connection.
         user_agent: Optional override for outbound requests.
+        cookies_file: Netscape-format cookie jar presented to sources, or
+            ``None`` to browse anonymously. Several platforms - X most visibly -
+            now return "no video in this post" to an anonymous session for
+            content a logged-in one can see, so without this they are simply
+            unavailable rather than broken.
+
+            **This file is a set of live session credentials**, equivalent to
+            being logged in as whoever exported it. Mount it read-only, keep it
+            at mode 600, and export from an account whose loss would be an
+            inconvenience rather than a catastrophe.
     """
 
     enabled: bool = False
     allow_merge: bool = True
+    prefer_compatible_codecs: bool = True
     max_item_bytes: int = Field(default=2 * 1024**3, ge=1)
     probe_timeout_seconds: float = Field(default=30.0, gt=0)
     download_timeout_seconds: float = Field(default=3600.0, gt=0)
@@ -276,6 +295,7 @@ class DownloadSettings(_ConfigSection):
     progress_interval_seconds: float = Field(default=0.5, ge=0)
     rate_limit_bytes_per_second: int | None = Field(default=None, ge=1)
     user_agent: str | None = None
+    cookies_file: Path | None = None
 
 
 class WorkerSettings(_ConfigSection):

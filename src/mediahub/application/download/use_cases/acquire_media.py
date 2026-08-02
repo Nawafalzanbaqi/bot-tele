@@ -71,6 +71,7 @@ class AcquireMedia:
         clock: Clock,
         max_item_bytes: int | None = None,
         allow_merge: bool = False,
+        prefer_compatible: bool = False,
     ) -> None:
         """Wire the use case to its ports.
 
@@ -89,6 +90,7 @@ class AcquireMedia:
         self._clock = clock
         self._max_item_bytes = max_item_bytes
         self._allow_merge = allow_merge
+        self._prefer_compatible = prefer_compatible
 
     async def execute(
         self,
@@ -128,8 +130,15 @@ class AcquireMedia:
         # Re-probe rather than trusting metadata the caller gathered earlier:
         # format identifiers expire, and a stale one downloads the wrong thing.
         metadata = await self._downloader.probe(request.url)
-        options = build_quality_options(metadata, max_bytes=self._max_item_bytes)
-        selection = selection_for(request.quality_key, options, allow_merge=self._allow_merge)
+        options = build_quality_options(
+            metadata, max_bytes=self._max_item_bytes, allow_merge=self._allow_merge
+        )
+        selection = selection_for(
+            request.quality_key,
+            options,
+            allow_merge=self._allow_merge,
+            prefer_compatible=self._prefer_compatible,
+        )
         chosen = next(option for option in options if option.key == request.quality_key)
 
         capabilities = self._delivery.capabilities_for(request.target)

@@ -108,6 +108,13 @@ class FormatSelection:
         allow_merge: Permit selecting separate video and audio streams that must
             be merged afterwards. **Defaults to false** because merging needs
             FFmpeg, which the engine does not own.
+        prefer_compatible: Prefer codecs an ordinary consumer player can decode,
+            accepting a larger file for the same resolution. Matters as soon as
+            merging is on: the *best* streams a platform offers are increasingly
+            AV1 or VP9 with Opus audio, which are efficient and which most phone
+            players and chat clients cannot play - so the result arrives, is the
+            right resolution, and does not open. A newer codec is not a better
+            download if nothing renders it.
     """
 
     preference: FormatPreference = FormatPreference.BEST
@@ -116,6 +123,7 @@ class FormatSelection:
     max_filesize_bytes: int | None = None
     prefer_container: str | None = None
     allow_merge: bool = False
+    prefer_compatible: bool = False
 
     def __post_init__(self) -> None:
         """Reject selections that contradict themselves."""
@@ -133,19 +141,30 @@ class FormatSelection:
             raise InvalidFormatSelectionError(message)
 
     @classmethod
-    def best(cls, *, allow_merge: bool = False) -> FormatSelection:
+    def best(cls, *, allow_merge: bool = False, prefer_compatible: bool = False) -> FormatSelection:
         """Select the best available quality."""
-        return cls(preference=FormatPreference.BEST, allow_merge=allow_merge)
+        return cls(
+            preference=FormatPreference.BEST,
+            allow_merge=allow_merge,
+            prefer_compatible=prefer_compatible,
+        )
 
     @classmethod
-    def audio_only(cls) -> FormatSelection:
+    def audio_only(cls, *, prefer_compatible: bool = False) -> FormatSelection:
         """Select the best audio-only stream, in its native container."""
-        return cls(preference=FormatPreference.AUDIO_ONLY)
+        return cls(preference=FormatPreference.AUDIO_ONLY, prefer_compatible=prefer_compatible)
 
     @classmethod
-    def up_to_height(cls, height: int, *, allow_merge: bool = False) -> FormatSelection:
+    def up_to_height(
+        cls, height: int, *, allow_merge: bool = False, prefer_compatible: bool = False
+    ) -> FormatSelection:
         """Select the best quality no taller than ``height`` pixels."""
-        return cls(preference=FormatPreference.BEST, max_height=height, allow_merge=allow_merge)
+        return cls(
+            preference=FormatPreference.BEST,
+            max_height=height,
+            allow_merge=allow_merge,
+            prefer_compatible=prefer_compatible,
+        )
 
     @classmethod
     def specific(cls, format_id: str) -> FormatSelection:

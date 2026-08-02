@@ -297,7 +297,9 @@ class Container:
     def probe_source_use_case(self) -> ProbeSource:
         """Build the "what is at this link?" use case."""
         return ProbeSource(
-            downloader=self.downloader, max_bytes=self.settings.download.max_item_bytes
+            downloader=self.downloader,
+            max_bytes=self.settings.download.max_item_bytes,
+            allow_merge=self.settings.download.allow_merge,
         )
 
     def acquire_media_use_case(self, delivery: DeliveryRouter) -> AcquireMedia:
@@ -322,6 +324,7 @@ class Container:
             clock=self.clock,
             max_item_bytes=self.settings.download.max_item_bytes,
             allow_merge=self.settings.download.allow_merge,
+            prefer_compatible=self.settings.download.prefer_compatible_codecs,
         )
 
     def delivery_router(self, *providers: DeliveryProvider) -> DeliveryProviderRegistry:

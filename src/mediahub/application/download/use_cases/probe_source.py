@@ -22,10 +22,23 @@ class ProbeSource:
     A caller shows the result to a person, who picks a quality.
     """
 
-    def __init__(self, *, downloader: DownloaderPort, max_bytes: int | None = None) -> None:
-        """Wire the use case to the engine and this deployment's ceiling."""
+    def __init__(
+        self,
+        *,
+        downloader: DownloaderPort,
+        max_bytes: int | None = None,
+        allow_merge: bool = False,
+    ) -> None:
+        """Wire the use case to the engine and this deployment's ceiling.
+
+        ``allow_merge`` is needed here even though this use case downloads
+        nothing: it decides whether the size shown against a rung includes the
+        audio track that will be attached to it. The menu and the acquisition
+        must agree, or the number on the button is not the number delivered.
+        """
         self._downloader = downloader
         self._max_bytes = max_bytes
+        self._allow_merge = allow_merge
 
     async def execute(self, request: ProbeSourceQuery) -> SourceSummary:
         """Return a description of the source and the choices it supports.
@@ -42,7 +55,9 @@ class ProbeSource:
             MetadataUnavailableError: If the source cannot be described.
         """
         metadata = await self._downloader.probe(request.url)
-        qualities = build_quality_options(metadata, max_bytes=self._max_bytes)
+        qualities = build_quality_options(
+            metadata, max_bytes=self._max_bytes, allow_merge=self._allow_merge
+        )
         thumbnail = metadata.best_thumbnail()
 
         logger.bind(

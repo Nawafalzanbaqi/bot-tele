@@ -13,7 +13,7 @@ off by default.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from mediahub.application.download.ports import FormatPreference
 
@@ -73,10 +73,33 @@ def _best_single(selection: FormatSelection) -> str:
     return f"{constrained}/b"
 
 
+COMPATIBLE_VIDEO: Final[str] = "[vcodec^=avc1]"
+"""H.264. Decoded in hardware by every phone, browser and chat client."""
+
+COMPATIBLE_AUDIO: Final[str] = "[acodec^=mp4a]"
+"""AAC. The audio half of the same bargain."""
+
+
 def _merged(selection: FormatSelection) -> str:
-    """Return an expression for separate video and audio streams."""
-    video = f"bv*{_constraints(selection, include_container=False)}"
-    return f"{video}+ba"
+    """Return an expression for separate video and audio streams.
+
+    When compatibility is asked for, H.264 + AAC is tried **first** and any
+    codec second. That ordering is the whole point: the streams a platform
+    considers best are increasingly AV1 or VP9 with Opus, which are smaller for
+    the same resolution and which most players cannot decode. Taking them
+    produces a file that is the right resolution, arrives intact, and does not
+    play - the least useful of all possible outcomes, because nothing reports
+    that anything went wrong.
+
+    The pair is also what makes the result muxable into MP4 without re-encoding,
+    which on a small device is the difference between seconds and minutes.
+    """
+    constraints = _constraints(selection, include_container=False)
+    fallback = f"bv*{constraints}+ba"
+    if not selection.prefer_compatible:
+        return fallback
+    preferred = f"bv*{COMPATIBLE_VIDEO}{constraints}+ba{COMPATIBLE_AUDIO}"
+    return f"{preferred}/{fallback}"
 
 
 def _audio_only(selection: FormatSelection) -> str:
