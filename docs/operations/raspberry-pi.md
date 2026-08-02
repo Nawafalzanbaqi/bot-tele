@@ -117,7 +117,53 @@ ceiling that the quality menu applies moves with it - nothing else changes.
 
 ---
 
-## 5. Storage
+## 5. Platforms that need a logged-in session
+
+Some platforms show nothing to an anonymous visitor. The failure is reported
+honestly but reads like a bug in the bot:
+
+| Platform | What it says | What it means |
+| -------- | ------------ | ------------- |
+| X / Twitter | `No video could be found in this tweet` | The post exists; the media is not served to a logged-out session |
+| TikTok | `Your IP address is blocked from accessing this post` | The address, not the post - TikTok blocks broadly |
+| Instagram | varies | Private accounts, and increasingly public ones |
+
+The fix for all three is the same: give the engine a cookie jar exported from a
+browser that is logged in.
+
+```bash
+mkdir -p ~/bot-tele/secrets
+# Export cookies for the site with any Netscape-format cookie exporter,
+# then put the file here:
+mv cookies.txt ~/bot-tele/secrets/cookies.txt
+chmod 600 ~/bot-tele/secrets/cookies.txt
+```
+
+```bash
+# in .env
+MEDIAHUB_DOWNLOAD__COOKIES_FILE=/secrets/cookies.txt
+```
+
+```bash
+docker compose -f docker-compose.pi.yml up -d --force-recreate telegram
+```
+
+**Understand what this file is before creating it.** It is a set of live
+session credentials: whoever holds it is logged in as the account that exported
+it, without a password and without a second factor. It is mounted read-only and
+should be mode 600, but the real control is *which account you export from* -
+use one whose loss would be an inconvenience rather than a catastrophe.
+Sessions also expire, so a platform that worked last month and does not today
+usually needs a fresh export rather than a code change.
+
+A separate consequence: **extractors expire too.** yt-dlp is installed from the
+pre-release channel precisely because platforms change without notice, and a
+month-old release fails on TikTok with a fix already published upstream. When a
+site that used to work stops, rebuild before investigating anything else.
+
+---
+
+## 6. Storage
 
 Both the database and the scratch space live on one named volume, because the
 target has one NVMe. On a machine with two devices, put the workspace on the
@@ -147,7 +193,7 @@ The workspace needs no backup. That is the point of it.
 
 ---
 
-## 6. Sharing the device
+## 7. Sharing the device
 
 Three settings exist because other projects are running here:
 
@@ -167,7 +213,7 @@ Three settings exist because other projects are running here:
 
 ---
 
-## 7. Checks
+## 8. Checks
 
 ```bash
 # Is it healthy?
@@ -194,7 +240,7 @@ fixes would be wrong.
 
 ---
 
-## 8. Updating
+## 9. Updating
 
 yt-dlp is pinned and updated by rebuilding, never by self-updating at runtime -
 a downloader that rewrites itself on a device nobody watches is a supply chain

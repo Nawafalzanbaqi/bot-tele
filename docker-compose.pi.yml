@@ -64,6 +64,11 @@ services:
       MEDIAHUB_WORKSPACE__PURGE_ON_START: "true"
     volumes:
       - data:/data
+      # Optional cookie jar. Read-only, because nothing here should ever write
+      # to a file of live session credentials. Create ./secrets/cookies.txt and
+      # set MEDIAHUB_DOWNLOAD__COOKIES_FILE=/secrets/cookies.txt to use it;
+      # without the file the mount is an empty directory and nothing changes.
+      - ./secrets:/secrets:ro
     stop_grace_period: 60s
     deploy:
       resources:
