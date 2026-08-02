@@ -131,7 +131,10 @@ class AcquireMedia:
         # format identifiers expire, and a stale one downloads the wrong thing.
         metadata = await self._downloader.probe(request.url)
         options = build_quality_options(
-            metadata, max_bytes=self._max_item_bytes, allow_merge=self._allow_merge
+            metadata,
+            max_bytes=self._max_item_bytes,
+            allow_merge=self._allow_merge,
+            prefer_compatible=self._prefer_compatible,
         )
         selection = selection_for(
             request.quality_key,

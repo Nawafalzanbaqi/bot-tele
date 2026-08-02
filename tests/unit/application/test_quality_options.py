@@ -248,3 +248,45 @@ class TestSizesAreDeliveredSizes:
         )
 
         assert next(o for o in options if o.key == "h1080").approx_bytes == 43_000_000
+
+    def test_a_rung_uses_a_sibling_that_knows_its_size(self) -> None:
+        """Observed on YouTube: the first 1080p listed declares no size.
+
+        Taking whichever rendition came first left the rung showing "unknown"
+        while a sibling at the same resolution knew exactly how big it was.
+        """
+        unsized = VideoFormat(format_id="270", height=1080, video_codec="avc1.640028")
+        sized = VideoFormat(
+            format_id="137", height=1080, video_codec="avc1.640028", filesize_bytes=37_577_764
+        )
+
+        options = build_quality_options(metadata(video_formats=(unsized, sized)))
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 37_577_764
+
+    def test_the_size_quoted_is_the_codec_that_will_be_taken(self) -> None:
+        """H.264 is around a third larger than AV1 at the same resolution.
+
+        Quoting the AV1 figure and then downloading H.264 understates every
+        rung - which is the same class of untruth as the resolution one.
+        """
+        av1 = VideoFormat(
+            format_id="399", height=1080, video_codec="av01.0.08M.08", filesize_bytes=20_793_577
+        )
+        h264 = VideoFormat(
+            format_id="137", height=1080, video_codec="avc1.640028", filesize_bytes=37_577_764
+        )
+        source = metadata(video_formats=(av1, h264))
+
+        compatible = build_quality_options(source, prefer_compatible=True)
+        anything = build_quality_options(source)
+
+        assert next(o for o in compatible if o.key == "h1080").approx_bytes == 37_577_764
+        assert next(o for o in anything if o.key == "h1080").approx_bytes == 37_577_764
+
+    def test_rungs_are_still_offered_tallest_first(self) -> None:
+        options = build_quality_options(
+            metadata(video_formats=(video(360, 1), video(1080, 3), video(720, 2)))
+        )
+
+        assert [o.key for o in options if o.height] == ["h1080", "h720", "h360"]

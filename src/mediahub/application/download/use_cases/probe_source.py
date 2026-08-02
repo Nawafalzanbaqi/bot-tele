@@ -28,6 +28,7 @@ class ProbeSource:
         downloader: DownloaderPort,
         max_bytes: int | None = None,
         allow_merge: bool = False,
+        prefer_compatible: bool = False,
     ) -> None:
         """Wire the use case to the engine and this deployment's ceiling.
 
@@ -39,6 +40,7 @@ class ProbeSource:
         self._downloader = downloader
         self._max_bytes = max_bytes
         self._allow_merge = allow_merge
+        self._prefer_compatible = prefer_compatible
 
     async def execute(self, request: ProbeSourceQuery) -> SourceSummary:
         """Return a description of the source and the choices it supports.
@@ -56,7 +58,10 @@ class ProbeSource:
         """
         metadata = await self._downloader.probe(request.url)
         qualities = build_quality_options(
-            metadata, max_bytes=self._max_bytes, allow_merge=self._allow_merge
+            metadata,
+            max_bytes=self._max_bytes,
+            allow_merge=self._allow_merge,
+            prefer_compatible=self._prefer_compatible,
         )
         thumbnail = metadata.best_thumbnail()
 

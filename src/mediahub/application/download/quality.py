@@ -24,7 +24,7 @@ from mediahub.application.download.ports import FormatSelection
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
-    from mediahub.application.download.ports import MediaMetadata
+    from mediahub.application.download.ports import MediaMetadata, VideoFormat
 
 BEST_KEY: Final[str] = "best"
 AUDIO_KEY: Final[str] = "audio"
@@ -36,7 +36,11 @@ MAX_OPTIONS: Final[int] = 6
 
 
 def build_quality_options(
-    metadata: MediaMetadata, *, max_bytes: int | None = None, allow_merge: bool = False
+    metadata: MediaMetadata,
+    *,
+    max_bytes: int | None = None,
+    allow_merge: bool = False,
+    prefer_compatible: bool = False,
 ) -> tuple[QualityOption, ...]:
     """Return the choices to offer for a source, best first.
 
@@ -53,6 +57,11 @@ def build_quality_options(
             understates the higher rungs badly - the ones where a platform stops
             offering a muxed file at all - and a size the user cannot trust is
             worse than no size, because they plan around it.
+        prefer_compatible: Whether the engine will prefer H.264. It must be the
+            same answer given to :func:`selection_for`, because the size shown
+            has to be the size of the rendition actually taken: H.264 is
+            consistently larger than AV1 at the same resolution, so quoting one
+            and downloading the other understates every rung.
 
     Returns:
         Between one and :data:`MAX_OPTIONS` options. Always includes
@@ -74,17 +83,11 @@ def build_quality_options(
             )
         )
 
-    seen_heights: set[int] = set()
-    for video in metadata.video_formats:
-        if video.height is None:
-            continue
-        bucket = _bucket(video.height)
-        if bucket is None or bucket in seen_heights:
-            continue
+    for bucket, candidates in _by_height(metadata.video_formats):
+        video = _representative(candidates, prefer_compatible=prefer_compatible)
         estimated = _delivered_bytes(video.filesize_bytes, video.has_audio, audio_overhead)
         if _exceeds(estimated, max_bytes):
             continue
-        seen_heights.add(bucket)
         options.append(
             QualityOption(
                 key=f"h{bucket}",
@@ -158,6 +161,48 @@ def selection_for(
             chosen.height, allow_merge=allow_merge, prefer_compatible=prefer_compatible
         )
     return FormatSelection.best(allow_merge=allow_merge, prefer_compatible=prefer_compatible)
+
+
+def _by_height(formats: Sequence[VideoFormat]) -> list[tuple[int, list[VideoFormat]]]:
+    """Group renditions by the rung they round down to, tallest first.
+
+    Grouping rather than taking the first of each height is the difference
+    between a size and a shrug: a platform lists several renditions per
+    resolution and only some of them declare a size, so picking whichever came
+    first leaves the rung marked "unknown" while a sibling that knows its own
+    size goes unread.
+    """
+    buckets: dict[int, list[VideoFormat]] = {}
+    for video in formats:
+        if video.height is None:
+            continue
+        rung = _bucket(video.height)
+        if rung is not None:
+            buckets.setdefault(rung, []).append(video)
+    return sorted(buckets.items(), key=lambda item: item[0], reverse=True)
+
+
+def _representative(candidates: Sequence[VideoFormat], *, prefer_compatible: bool) -> VideoFormat:
+    """Return the rendition whose size should be shown for a rung.
+
+    It must be the one the engine will actually take, or the number is a
+    plausible lie. Preference order: a declared size first, because a rung whose
+    size is unknown cannot be planned around; then the codec the selection will
+    ask for, since H.264 is consistently larger than AV1 at the same resolution
+    and quoting the AV1 figure would understate every rung by a third.
+    """
+    sized = [video for video in candidates if video.filesize_bytes is not None] or list(candidates)
+    if prefer_compatible:
+        compatible = [video for video in sized if _is_compatible(video)]
+        if compatible:
+            return max(compatible, key=lambda video: video.filesize_bytes or 0)
+    return max(sized, key=lambda video: video.filesize_bytes or 0)
+
+
+def _is_compatible(video: VideoFormat) -> bool:
+    """Return whether an ordinary player can be expected to decode this."""
+    codec = (video.video_codec or "").lower()
+    return codec.startswith(("avc1", "h264"))
 
 
 def _merge_audio_bytes(metadata: MediaMetadata) -> int:

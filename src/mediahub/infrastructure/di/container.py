@@ -300,6 +300,7 @@ class Container:
             downloader=self.downloader,
             max_bytes=self.settings.download.max_item_bytes,
             allow_merge=self.settings.download.allow_merge,
+            prefer_compatible=self.settings.download.prefer_compatible_codecs,
         )
 
     def acquire_media_use_case(self, delivery: DeliveryRouter) -> AcquireMedia:
