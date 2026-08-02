@@ -115,7 +115,11 @@ def build_quality_options(
                 key=f"h{bucket}",
                 label=f"{bucket}p",
                 format_id=None,
-                height=bucket,
+                # What the *engine* is asked for, which is not what the rung is
+                # called. See `_short_side`: on a vertical video the two differ,
+                # and using the label here caps the download below the rendition
+                # it promises.
+                height=video.height or bucket,
                 approx_bytes=estimated,
                 is_audio_only=False,
             )
@@ -266,8 +270,29 @@ def resolve_auto(options: Sequence[QualityOption], *, ceiling: int | None) -> Qu
     return unbounded or options[0]
 
 
+def _short_side(video: VideoFormat) -> int | None:
+    """Return the dimension a quality label actually names.
+
+    **The short side, not the stored height.** "1080p" has always meant 1080
+    lines across the narrow dimension: a 1920x1080 film and a 1080x1920 phone
+    clip are both 1080p, and every platform, player and person calls them that.
+
+    Reading ``height`` instead breaks on vertical video, which is most of what
+    TikTok, Reels, Shorts and X carry. A 1080x1920 rendition has ``height``
+    1920, so it was bucketed as *1440p* - and the damage was not only the wrong
+    word on a button. The rung's engine constraint was that same number, so
+    asking for "1440p" capped the download at 1440 pixels tall and **excluded
+    the 1920-tall rendition it was named after**, quietly delivering 720p while
+    reporting 1440p. Measured on a real TikTok source: 6.22 MB taken when
+    16.86 MB was published.
+    """
+    if video.width is None or video.height is None:
+        return video.height
+    return min(video.width, video.height)
+
+
 def _by_height(formats: Sequence[VideoFormat]) -> list[tuple[int, list[VideoFormat]]]:
-    """Group renditions by the rung they round down to, tallest first.
+    """Group renditions by the rung they round down to, largest first.
 
     Grouping rather than taking the first of each height is the difference
     between a size and a shrug: a platform lists several renditions per
@@ -277,9 +302,10 @@ def _by_height(formats: Sequence[VideoFormat]) -> list[tuple[int, list[VideoForm
     """
     buckets: dict[int, list[VideoFormat]] = {}
     for video in formats:
-        if video.height is None:
+        side = _short_side(video)
+        if side is None:
             continue
-        rung = _bucket(video.height)
+        rung = _bucket(side)
         if rung is not None:
             buckets.setdefault(rung, []).append(video)
     return sorted(buckets.items(), key=lambda item: item[0], reverse=True)

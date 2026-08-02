@@ -401,3 +401,73 @@ class TestSourcesWithNoStreams:
         )
 
         assert [option.key for option in options] == [AUDIO_KEY]
+
+
+class TestVerticalVideoIsLabelledAndFetchedCorrectly:
+    """A phone clip is 1080p when it is 1080 wide, not 1440p because it is tall.
+
+    Measured on a real TikTok source before this was fixed: the ladder read
+    1440p/1080p/720p for renditions that are actually 1080p and 720p, and
+    choosing the top rung capped the engine at 1440 pixels tall - which excluded
+    the 1080x1920 rendition the rung was named after. 6.22 MB arrived where
+    16.86 MB was published, labelled as the higher quality.
+    """
+
+    @staticmethod
+    def portrait(width: int, height: int, size: int | None = None) -> VideoFormat:
+        return VideoFormat(
+            format_id=f"v{width}x{height}", width=width, height=height, filesize_bytes=size
+        )
+
+    def _tiktok(self) -> MediaMetadata:
+        return metadata(
+            video_formats=(
+                self.portrait(1080, 1920, 16_857_157),
+                self.portrait(720, 1280, 6_525_878),
+            )
+        )
+
+    def test_rungs_are_named_after_the_short_side(self) -> None:
+        options = build_quality_options(self._tiktok())
+
+        assert [option.label for option in options if option.key.startswith("h")] == [
+            "1080p",
+            "720p",
+        ]
+
+    def test_the_top_rung_does_not_exclude_its_own_rendition(self) -> None:
+        """The defect that cost quality rather than just wording."""
+        options = build_quality_options(self._tiktok())
+        top = next(option for option in options if option.key == "h1080")
+
+        selection = selection_for(top.key, options)
+
+        assert selection.max_height is not None
+        assert (
+            selection.max_height >= 1920
+        ), "capping at the label would exclude the 1080x1920 rendition it names"
+
+    def test_a_lower_rung_still_excludes_the_higher_one(self) -> None:
+        options = build_quality_options(self._tiktok())
+        lower = next(option for option in options if option.key == "h720")
+
+        selection = selection_for(lower.key, options)
+
+        assert selection.max_height is not None
+        assert selection.max_height < 1920, "720p must not be able to take the 1080p rendition"
+
+    def test_landscape_video_is_unchanged(self) -> None:
+        """The fix must not move the answer for ordinary video."""
+        options = build_quality_options(
+            metadata(video_formats=(self.portrait(1920, 1080, 40_000_000),))
+        )
+        rung = next(option for option in options if option.key.startswith("h"))
+
+        assert rung.label == "1080p"
+        assert selection_for(rung.key, options).max_height == 1080
+
+    def test_a_format_without_a_width_still_buckets(self) -> None:
+        """Some extractors report only a height; that must not vanish."""
+        options = build_quality_options(metadata(video_formats=(video(720, 5_000_000),)))
+
+        assert [option.label for option in options if option.key.startswith("h")] == ["720p"]

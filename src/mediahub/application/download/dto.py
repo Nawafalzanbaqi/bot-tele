@@ -154,7 +154,11 @@ class QualityOption:
             size limits, so it is never a URL or a format expression.
         label: What to show a person.
         format_id: Engine-specific rendition, when the option names one.
-        height: Vertical resolution the option caps at, when it caps one.
+        height: Pixel height the engine is capped at, when the option caps one.
+            **Not the number in the label**, and the two differ on vertical
+            video: a rung called "1080p" on a 1080x1920 clip caps at 1920,
+            because that is how tall the 1080p rendition is. Capping at 1080
+            would exclude the very rendition the label promises.
         approx_bytes: Rough size, when the source declares one. Always a hint.
         is_audio_only: Whether choosing this yields audio without video.
     """
