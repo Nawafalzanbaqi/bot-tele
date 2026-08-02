@@ -87,6 +87,17 @@ services:
       # Harmless when the `localapi` profile is not in use: the volume is then
       # simply empty.
       - botapi:/var/lib/telegram-bot-api:ro
+    # The Bot API server writes its files 0640 into 0750 directories owned by
+    # its own uid (101). Mounting the volume is therefore not enough - without
+    # membership of that group this process cannot even traverse the directory,
+    # the client library's "is this a local file?" check answers no, and it
+    # falls back to an HTTP fetch that 404s.
+    #
+    # A supplementary group rather than running either container as the other's
+    # user: it grants exactly the read this needs and changes nothing about how
+    # the server runs or what it owns.
+    group_add:
+      - "101"
     stop_grace_period: 60s
     deploy:
       resources:
