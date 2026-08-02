@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from mediahub.application.delivery.errors import ArtifactTooLargeError
+from mediahub.application.delivery.errors import ArtifactTooLargeError, DeliveryError
 from mediahub.application.delivery.ports import DeliveryKind, DeliveryRequest
 from mediahub.application.download.dto import AcquisitionSummary
 from mediahub.application.download.errors import FormatUnavailableError
@@ -47,10 +47,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.download.journal import AcquisitionJournal
     from mediahub.application.download.ports import (
         DownloaderPort,
+        DownloadResult,
         MediaMetadata,
         ProgressCallback,
     )
-    from mediahub.application.workspace.ports import ArtifactRef, WorkspaceLeasing
+    from mediahub.application.workspace.ports import (
+        ArtifactRef,
+        WorkspaceLeasing,
+        WorkspaceScope,
+    )
 
 _RESERVE_FACTOR = 2.2
 """Input plus any derived artifact plus headroom. Reserving exactly the
@@ -196,6 +201,13 @@ class AcquireMedia:
                 on_progress=on_delivery_progress,
             )
 
+            # A carousel is one request and several files. Delivering only the
+            # first is the difference between "it works" and "it lost half my
+            # post", and the caller cannot tell which happened.
+            extra = await self._deliver_companions(
+                result, request=request, capabilities=capabilities, scope=scope
+            )
+
             await self._journal.record(
                 JournalEntry(
                     principal=request.requested_by,
@@ -231,6 +243,7 @@ class AcquireMedia:
             message_id=receipt.provider_message_id,
             delivered_at=receipt.delivered_at,
             local_copy_released=True,
+            items_delivered=1 + extra,
         )
 
     @staticmethod
@@ -260,6 +273,51 @@ class AcquireMedia:
         if self._max_item_bytes is None:
             return delivery_limit
         return min(self._max_item_bytes, delivery_limit)
+
+    async def _deliver_companions(
+        self,
+        result: DownloadResult,
+        *,
+        request: AcquireMediaCommand,
+        capabilities: DeliveryCapabilities,
+        scope: WorkspaceScope,
+    ) -> int:
+        """Send the other items of the same post, and report how many went.
+
+        Sequential rather than concurrent: a chat service rate-limits uploads,
+        and racing them turns a carousel into a flood wait. One that the
+        destination refuses is skipped rather than failing the whole request -
+        the first picture has already arrived, and losing it to be strict about
+        the fourth serves nobody.
+        """
+        companions = [
+            artifact for artifact in result.artifacts if artifact.role is ArtifactRole.COMPANION
+        ]
+        sent = 0
+        for artifact in companions:
+            if not capabilities.accepts(artifact.size_bytes):
+                logger.bind(name=artifact.name, bytes=artifact.size_bytes).warning(
+                    "Skipped an item of this post: the destination will not accept it"
+                )
+                continue
+            try:
+                await self._delivery.deliver(
+                    DeliveryRequest(
+                        target=request.target,
+                        artifact=artifact,
+                        kind=DeliveryKind.PHOTO,
+                        caption=None,
+                        filename=artifact.name,
+                    ),
+                    scope,
+                )
+            except DeliveryError as error:
+                logger.bind(name=artifact.name, code=error.code).warning(
+                    "Skipped an item of this post: {}", error.message
+                )
+                continue
+            sent += 1
+        return sent
 
     @staticmethod
     def _check_deliverable(artifact: ArtifactRef, capabilities: DeliveryCapabilities) -> None:

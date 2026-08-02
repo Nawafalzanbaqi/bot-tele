@@ -249,6 +249,10 @@ class AcquisitionSummary:
         local_copy_released: Whether the local bytes have been deleted. Always
             true on success - it is the point of the design, and it is reported
             so a caller can assert on it.
+        items_delivered: How many files were sent. More than one when the post
+            was a carousel or a slideshow, and worth reporting: a caller that
+            sees "1" for a five-picture post has lost four of them and would
+            otherwise have no way to know.
     """
 
     url: str
@@ -262,6 +266,7 @@ class AcquisitionSummary:
     remote_unique_id: str | None = None
     message_id: str | None = None
     local_copy_released: bool = True
+    items_delivered: int = 1
 
 
 # --------------------------------------------------------------------------- #

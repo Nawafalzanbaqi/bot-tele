@@ -63,6 +63,11 @@ SCOPED_THIRD_PARTY: dict[str, tuple[str, ...]] = {
         "mediahub.infrastructure.download.",
         "mediahub.infrastructure.sources.",
     ),
+    # Scoped tighter than yt-dlp, to its own adapter package rather than the
+    # whole of `download`. The composite that chooses between the two engines
+    # lives one level up and must be able to route without knowing what either
+    # of them is made of.
+    "gallery_dl": ("mediahub.infrastructure.download.gallerydl.",),
     "telegram": ("mediahub.infrastructure.delivery.telegram.",),
 }
 

@@ -69,6 +69,8 @@ from mediahub.infrastructure.delivery.registry import (
     DeliveryProviderRegistry,
     ProviderRegistration,
 )
+from mediahub.infrastructure.download.composite import CompositeDownloader
+from mediahub.infrastructure.download.gallerydl.downloader import GalleryDlDownloader
 from mediahub.infrastructure.download.ytdlp.downloader import (
     YtDlpDownloader,
     engine_thread_stats,
@@ -608,8 +610,22 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
         return NullDownloader()
 
     policy = UrlPolicy(block_private_networks=settings.security.block_private_networks)
-    return YtDlpDownloader(
+    video = YtDlpDownloader(
         settings.download,
         url_policy=policy,
         address_guard=DnsAddressGuard(policy),
     )
+    if not settings.download.images_enabled:
+        return video
+
+    images = GalleryDlDownloader(settings.download, url_policy=policy)
+    if not images.is_available:
+        # Configured for images and unable to fetch them. Worth a line, because
+        # the symptom is otherwise a photo post refused exactly as before and
+        # nothing to say the engine meant to handle it is missing.
+        logger.warning(
+            "Image downloads are enabled but gallery-dl is not installed; "
+            "photo posts will keep being refused"
+        )
+        return video
+    return CompositeDownloader(video, images)

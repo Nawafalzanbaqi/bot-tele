@@ -34,6 +34,7 @@ dependencies = [
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "yt-dlp>=2025.1.15",
+    "gallery-dl>=1.28.0",
     "python-telegram-bot>=21.0",
 ]
 
@@ -191,10 +192,12 @@ mypy_path = "src"
 module = ["migrations.*"]
 ignore_errors = true
 
-# yt-dlp ships no type information. It is confined to one package, and the
-# adapter re-types everything it returns at the boundary.
+# Neither download engine ships type information, and neither is installed in
+# every environment - the image has both, a developer machine may have neither.
+# Both are confined to one adapter each, which re-types everything at the
+# boundary.
 [[tool.mypy.overrides]]
-module = ["yt_dlp.*"]
+module = ["yt_dlp.*", "gallery_dl.*"]
 ignore_missing_imports = true
 
 # psutil is an optional convenience for the benchmark suite: it gives an exact

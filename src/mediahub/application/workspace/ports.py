@@ -51,12 +51,18 @@ class ArtifactRole(StrEnum):
 
     Attributes:
         PRIMARY: The media itself. Exactly one per download result.
+        COMPANION: Another item of the same post, and media in its own right -
+            the second and later pictures of a carousel or a slideshow.
+            Distinct from ``THUMBNAIL``, which is a preview *of* the primary and
+            is never worth delivering on its own; a companion is something the
+            user asked for and would notice the absence of.
         THUMBNAIL: A poster or preview image.
         SUBTITLE: A subtitle or caption track.
         SIDECAR: Anything else the engine produced, e.g. extracted metadata.
     """
 
     PRIMARY = "primary"
+    COMPANION = "companion"
     THUMBNAIL = "thumbnail"
     SUBTITLE = "subtitle"
     SIDECAR = "sidecar"

@@ -342,6 +342,13 @@ class DownloadSettings(_ConfigSection):
             the hostname. No cookie, retry or engine update changes that,
             because the traffic never reaches the site. Sending it through a
             proxy on the far side of the filter is what changes it.
+        images_enabled: Whether to fall back to the still-image engine for
+            sources the video engine finds no stream in.
+
+            On by default because the alternative is refusing a photo post with
+            "there is no video here", which is true and unhelpful. The image
+            engine is only ever asked about what the video engine has already
+            declined, so nothing that works today changes.
         proxy_hosts: Hosts to send through ``proxy`` from the first attempt.
             Comma-separated, and matching covers subdomains.
 
@@ -378,6 +385,7 @@ class DownloadSettings(_ConfigSection):
     cookies_file: Path | None = None
     proxy: str | None = None
     proxy_hosts: tuple[str, ...] = ()
+    images_enabled: bool = True
 
     @field_validator("proxy_hosts", mode="before")
     @classmethod
