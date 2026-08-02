@@ -64,11 +64,18 @@ services:
       MEDIAHUB_WORKSPACE__PURGE_ON_START: "true"
     volumes:
       - data:/data
-      # Optional cookie jar. Read-only, because nothing here should ever write
-      # to a file of live session credentials. Create ./secrets/cookies.txt and
-      # set MEDIAHUB_DOWNLOAD__COOKIES_FILE=/secrets/cookies.txt to use it;
-      # without the file the mount is an empty directory and nothing changes.
-      - ./secrets:/secrets:ro
+      # The cookie jar, and deliberately **writable**.
+      #
+      # Read-only looks safer and is worse. Sites rotate their cookies on every
+      # request and the engine writes the rotated set back after each download,
+      # which is what keeps a session alive without anybody touching it. Mount
+      # this read-only and that renewal is silently discarded: the jar slowly
+      # goes stale and a platform starts refusing again weeks later, for no
+      # visible reason.
+      #
+      # The exposure is bounded and worth it: one process reads and writes this
+      # file, it runs as a non-root user, and the file is 0600.
+      - ./secrets:/secrets
     stop_grace_period: 60s
     deploy:
       resources:

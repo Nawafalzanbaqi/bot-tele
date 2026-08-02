@@ -148,13 +148,35 @@ MEDIAHUB_DOWNLOAD__COOKIES_FILE=/secrets/cookies.txt
 docker compose -f docker-compose.pi.yml up -d --force-recreate telegram
 ```
 
+Easier: **send the file to the bot as an attachment.** Only an owner may, the
+jar is validated before it replaces anything, and the upload is deleted from
+the conversation afterwards. `/cookies` reports what is installed and when the
+first cookie lapses; `/cookies clear` removes it.
+
+### It keeps itself fresh
+
+The jar is mounted **writable**, which looks like the less safe choice and is
+the right one. Sites rotate their cookies on nearly every request, and the
+engine writes the rotated set back after each download. That renewal is what
+keeps a session alive with nobody touching it - measured on the target device,
+one download turned a two-line seed jar into eleven lines of current cookies.
+
+Mount it read-only and the renewal is silently discarded: the stored jar
+slowly goes stale and a platform starts refusing again weeks later, for no
+visible reason and with nothing in the logs to connect the two.
+
+So the maintenance story is: **export once, and it maintains itself** as long
+as the bot is used regularly enough that the session never lapses between uses.
+
 **Understand what this file is before creating it.** It is a set of live
 session credentials: whoever holds it is logged in as the account that exported
-it, without a password and without a second factor. It is mounted read-only and
-should be mode 600, but the real control is *which account you export from* -
-use one whose loss would be an inconvenience rather than a catastrophe.
-Sessions also expire, so a platform that worked last month and does not today
-usually needs a fresh export rather than a code change.
+it, without a password and without a second factor. It is 0600 and read by one
+non-root process, but the real control is *which account you export from* - use
+one whose loss would be an inconvenience rather than a catastrophe.
+
+**Do not export YouTube cookies.** Google invalidates a session used from an
+unexpected address, and the usual result is being signed out everywhere.
+YouTube needs no cookies here anyway.
 
 A separate consequence: **extractors expire too.** yt-dlp is installed from the
 pre-release channel precisely because platforms change without notice, and a
