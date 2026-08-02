@@ -233,6 +233,10 @@ services:
       WIREGUARD_PUBLIC_KEY: ${WIREGUARD_PUBLIC_KEY:-}
       WIREGUARD_PRESHARED_KEY: ${WIREGUARD_PRESHARED_KEY:-}
       WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
+      # Some paths cannot carry WireGuard's default 1420. The symptom is not a
+      # tunnel that fails to come up but one that stalls on the first packet
+      # larger than a handshake.
+      WIREGUARD_MTU: ${WIREGUARD_MTU:-}
       # Only consulted when VPN_SERVICE_PROVIDER names a provider rather than
       # `custom`; harmless when it does not.
       OPENVPN_USER: ${OPENVPN_USER:-}

@@ -51,9 +51,20 @@ field() {
 
 PRIVATE_KEY="$(field Interface PrivateKey)"
 ADDRESSES="$(field Interface Address)"
+MTU="$(field Interface MTU)"
 PUBLIC_KEY="$(field Peer PublicKey)"
 PRESHARED_KEY="$(field Peer PresharedKey)"
 ENDPOINT="$(field Peer Endpoint)"
+
+# Keep the IPv4 addresses only, and drop the spaces a generator leaves after
+# each comma.
+#
+# The container network is IPv4, so a tunnel address in the other family has
+# nothing to carry - and an address list that gluetun cannot parse stops the
+# tunnel from coming up at all, which is a confusing way to discover a stray
+# space. Cloudflare's own generator emits both families on one line.
+ADDRESSES="$(printf '%s' "${ADDRESSES}" | tr -d ' ' | tr ',' '\n' |
+    grep -v ':' | paste -sd ',' -)"
 
 for pair in "PrivateKey:${PRIVATE_KEY}" "Address:${ADDRESSES}" \
             "PublicKey:${PUBLIC_KEY}" "Endpoint:${ENDPOINT}"; do
@@ -70,9 +81,21 @@ done
 ENDPOINT_HOST="${ENDPOINT%:*}"
 ENDPOINT_PORT="${ENDPOINT##*:}"
 
+# Whichever resolver this machine happens to have. `getent` is absent from
+# minimal images and from Git Bash; falling back keeps the script usable in the
+# places somebody might reasonably run it.
+resolve() {
+    getent ahostsv4 "$1" 2>/dev/null | awk 'NR==1 {print $1; exit}' && return 0
+    python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$1" 2>/dev/null \
+        && return 0
+    nslookup "$1" 2>/dev/null |
+        awk '/^Address: / {print $2; exit}' && return 0
+    return 1
+}
+
 case "${ENDPOINT_HOST}" in
     *[!0-9.]*)
-        RESOLVED="$(getent ahostsv4 "${ENDPOINT_HOST}" 2>/dev/null | awk 'NR==1 {print $1}')"
+        RESOLVED="$(resolve "${ENDPOINT_HOST}" | head -n 1)"
         if [ -z "${RESOLVED}" ]; then
             printf 'error: could not resolve endpoint host %s\n' "${ENDPOINT_HOST}" >&2
             exit 1
@@ -92,6 +115,18 @@ WIREGUARD_PRIVATE_KEY=${PRIVATE_KEY}
 WIREGUARD_PUBLIC_KEY=${PUBLIC_KEY}
 WIREGUARD_PRESHARED_KEY=${PRESHARED_KEY}
 WIREGUARD_ADDRESSES=${ADDRESSES}
-# Only the download engine uses this; delivery stays on the direct route.
+ENV
+
+# Carried through when the provider states one. WireGuard's default of 1420 is
+# too large for some paths - Cloudflare asks for 1280 - and the symptom is not
+# a failure to connect but a tunnel that comes up and then stalls on anything
+# larger than a handshake, which is a miserable thing to debug.
+if [ -n "${MTU}" ]; then
+    printf 'WIREGUARD_MTU=%s\n' "${MTU}"
+fi
+
+cat <<'ENV'
+# Only the download engine uses this, and only for hosts the direct route
+# fails on. Everything else is fetched directly.
 MEDIAHUB_DOWNLOAD__PROXY=http://vpn:8888
 ENV
