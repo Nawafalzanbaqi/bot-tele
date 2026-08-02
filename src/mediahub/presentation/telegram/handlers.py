@@ -330,31 +330,31 @@ class TelegramHandlers:
         """Handle a button press."""
         payload = decode_callback(intent.callback_data)
         if payload is None:
-            await self._acknowledge(intent, "That button is no longer valid.")
+            await self._acknowledge(intent, "هذا الزر لم يعد صالحًا.")
             return
 
         session = self._services.sessions.get(payload.token, owner=principal.identity)
         if session is None:
-            await self._acknowledge(intent, "That request has expired. Send the link again.")
+            await self._acknowledge(intent, "انتهت صلاحية هذا الطلب. أرسل الرابط مرة أخرى.")
             return
 
         if payload.action is CallbackAction.DISMISS:
             self._services.sessions.discard(session.token)
-            await self._acknowledge(intent, "Cancelled.")
-            await self._edit(session, "Cancelled.")
+            await self._acknowledge(intent, "تمّ الإلغاء.")
+            await self._edit(session, "تمّ الإلغاء.")
             return
 
         if payload.action is CallbackAction.ABORT:
             if session.cancellation is not None:
                 session.cancellation.cancel()
-            await self._acknowledge(intent, "Stopping…")
+            await self._acknowledge(intent, "جارٍ الإيقاف…")
             return
 
         if payload.choice is None:
-            await self._acknowledge(intent, "That button is no longer valid.")
+            await self._acknowledge(intent, "هذا الزر لم يعد صالحًا.")
             return
 
-        await self._acknowledge(intent, "Starting…")
+        await self._acknowledge(intent, "جارٍ البدء…")
         self._spawn(self._acquire(session, principal, payload.choice))
 
     # -- Acquisition ---------------------------------------------------------

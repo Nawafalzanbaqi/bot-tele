@@ -292,7 +292,16 @@ class DownloadSettings(_ConfigSection):
         probe_backoff_seconds: Base delay between probe attempts.
         retries: Engine-level retries for a whole download.
         fragment_retries: Retries for one fragment of a fragmented format.
-        extractor_retries: Retries while extracting metadata.
+        extractor_retries: Retries while extracting metadata, **inside a single
+            engine call**. This is the one that covers a download as well as a
+            probe, and it is why the default is not low.
+
+            Extraction is where an intermittent refusal lands: a site answers
+            403 to one request and serves the next, which happens routinely
+            when the request leaves through a shared egress address. The outer
+            ``probe_attempts`` only ever protected probing, so a refusal met
+            while *downloading* reached the user as a flat failure for
+            something that would have worked seconds later.
         concurrent_fragments: Fragments fetched in parallel. More than one
             rarely helps on a single-core-bound device.
         progress_interval_seconds: Shortest gap between progress callbacks.
@@ -342,11 +351,11 @@ class DownloadSettings(_ConfigSection):
     probe_timeout_seconds: float = Field(default=30.0, gt=0)
     download_timeout_seconds: float = Field(default=3600.0, gt=0)
     socket_timeout_seconds: float = Field(default=30.0, gt=0)
-    probe_attempts: int = Field(default=3, ge=1, le=10)
-    probe_backoff_seconds: float = Field(default=2.0, ge=0)
+    probe_attempts: int = Field(default=4, ge=1, le=10)
+    probe_backoff_seconds: float = Field(default=3.0, ge=0)
     retries: int = Field(default=3, ge=0, le=20)
     fragment_retries: int = Field(default=5, ge=0, le=50)
-    extractor_retries: int = Field(default=2, ge=0, le=10)
+    extractor_retries: int = Field(default=5, ge=0, le=10)
     concurrent_fragments: int = Field(default=1, ge=1, le=8)
     progress_interval_seconds: float = Field(default=0.5, ge=0)
     rate_limit_bytes_per_second: int | None = Field(default=None, ge=1)

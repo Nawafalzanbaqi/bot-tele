@@ -36,111 +36,125 @@ _KIB: Final[int] = 1024
 _BAR_WIDTH: Final[int] = 12
 _MAX_TITLE: Final[int] = 120
 _MAX_SITES_SHOWN: Final[int] = 8
+
+_STAGE_LABELS: Final[dict[str, str]] = {
+    "validating": "جارٍ الفحص",
+    "selecting": "اختيار الجودة",
+    "downloading": "جارٍ التحميل",
+    "processing": "جارٍ المعالجة",
+    "verifying": "جارٍ التحقّق",
+    "completed": "اكتمل",
+}
+"""Engine stage names, in the language the replies are written in."""
 """Enough to confirm the right export; short enough to stay one readable line."""
 
 ERROR_MESSAGES: Final[dict[str, str]] = {
-    "invalid_url": "That does not look like a link I can fetch.",
+    # Every entry answers two questions, in this order: what happened, and what
+    # to do about it. A message that only names the fault leaves the reader
+    # re-sending the same link and hoping.
+    "invalid_url": (
+        "هذا لا يبدو رابطًا أستطيع جلبه.\n\n" "تأكد أنك نسخت الرابط كاملًا وأنه يبدأ بـ http."
+    ),
     "invalid_cookie_jar": (
-        "That is not a usable cookie file. Export it in Netscape format - most "
-        "cookie-exporter extensions offer that, and it is a text file with one "
-        "cookie per line."
+        "⚠️ هذا ليس ملف كوكيز صالحًا.\n\n"
+        "صدّره بصيغة Netscape — أغلب إضافات المتصفح تدعمها، وهو ملف نصي "
+        "فيه سطر لكل كوكي."
     ),
     "cookie_store_unavailable": (
-        "I have nowhere to keep cookies. Set MEDIAHUB_DOWNLOAD__COOKIES_FILE and " "restart me."
+        "لا يوجد مكان لحفظ الكوكيز.\n\n" "اضبط MEDIAHUB_DOWNLOAD__COOKIES_FILE ثم أعد تشغيلي."
     ),
-    "upload_failed": "I could not read that file. Try sending it again.",
-    "unsupported_url_scheme": "I can only fetch http and https links.",
-    "blocked_address": "That address is not reachable from here.",
+    "upload_failed": "تعذّرت قراءة الملف. أرسله مرة أخرى.",
+    "unsupported_url_scheme": "أستطيع جلب روابط http و https فقط.",
+    "blocked_address": "هذا العنوان غير مسموح بالوصول إليه من هنا.",
     "unsupported_provider": (
-        "I do not know how to handle that site. Check the link is a direct link "
-        "to one post or video."
+        "لا أعرف كيف أتعامل مع هذا الموقع.\n\n"
+        "تأكد أن الرابط يشير إلى مقطع أو منشور واحد، لا إلى صفحة حساب أو قائمة."
     ),
     "authentication_required": (
-        "🔒 This needs a signed-in session.\n\n"
-        "The post is probably there — the site just will not show it to a "
-        "logged-out visitor."
+        "🔒 هذا المحتوى يحتاج تسجيل دخول.\n\n"
+        "المنشور موجود على الأغلب، لكن الموقع لا يعرضه لزائر غير مسجّل."
     ),
     "no_playable_media": (
-        "🖼 That post has no video or audio in it — it is photos only.\n\n"
-        "My download engine fetches video and audio streams. Still images in an "
-        "X, Instagram or TikTok post are never offered as one, so there is "
-        "nothing for it to take.\n\n"
-        "If you want the picture, open the post, tap the image, copy the image's "
-        "own link and send me that — a direct image link works."
+        "🖼 هذا المنشور ليس فيه فيديو ولا صوت — صور فقط.\n\n"
+        "محرّك التحميل يجلب الفيديو والصوت، والصور الثابتة في منشورات X "
+        "وإنستقرام وتيك توك لا تُعرَض له إطلاقًا.\n\n"
+        "💡 الحل: افتح المنشور، اضغط على الصورة، انسخ رابط الصورة نفسها "
+        "وأرسله لي — الروابط المباشرة للصور تعمل."
     ),
     "geo_restricted": (
-        "🌍 This is not published in this device's country.\n\n"
-        "Cookies will not help; the block is on where the machine is."
+        "🌍 هذا المحتوى غير منشور في دولة هذا الجهاز.\n\n"
+        "الكوكيز لن تفيد — الحجب مبني على موقع الجهاز نفسه."
     ),
     "content_removed": (
-        "🗑 That no longer exists — deleted, suspended, or the link is wrong.\n\n"
-        "Check the link opens in your own browser."
+        "🗑 هذا المحتوى لم يعد موجودًا — محذوف أو الحساب موقوف أو الرابط خطأ.\n\n"
+        "جرّب فتح الرابط في متصفحك للتأكد."
     ),
     "connection_blocked": (
-        "🚧 The connection to that site was cut before it sent anything.\n\n"
-        "This is not the site being busy — the connection opens and is then "
-        "closed immediately, every time. That pattern means something in the "
-        "network between this device and the site is blocking it, usually the "
-        "internet provider.\n\n"
-        "Nothing I can change on this end fixes it. Routing the Pi's traffic "
-        "through a VPN or proxy would — set MEDIAHUB_DOWNLOAD__PROXY."
+        "🚧 الاتصال بالموقع يُقطع قبل أن يرسل شيئًا.\n\n"
+        "هذا حجب في الشبكة بين الجهاز والموقع، وليس عطلًا في الموقع.\n\n"
+        "💡 الحل: فعّل نفق الخروج — اضبط MEDIAHUB_DOWNLOAD__PROXY."
     ),
     "rate_limited": (
-        "⏳ The site is asking me to slow down. Wait a few minutes and send it " "again."
+        "⏳ الموقع يطلب منّي التمهّل.\n\n" "انتظر دقائق قليلة ثم أرسل الرابط مرة أخرى."
     ),
     "metadata_unavailable": (
-        "I could not read that link. It may be private, age-restricted or " "behind a paywall."
+        "تعذّرت قراءة هذا الرابط.\n\n" "قد يكون خاصًّا، أو مقيّدًا بالعمر، أو خلف اشتراك مدفوع."
     ),
-    "format_unavailable": "That quality is no longer available. Send the link again.",
-    "provider_error": "The site is having trouble right now. Try again in a few minutes.",
-    "download_failed": "The download did not finish. Try again in a few minutes.",
-    "download_timeout": "That took too long and was stopped.",
-    "download_cancelled": "Cancelled.",
-    "size_limit_exceeded": "That file is larger than I can handle.",
-    "artifact_too_large": "That file is too large to send here.",
-    "delivery_rate_limited": "The destination asked me to slow down. Try again shortly.",
-    "delivery_quota_exceeded": "The destination has no room right now.",
-    "provider_unavailable": "The destination is unavailable. Try again in a few minutes.",
-    "delivery_authentication_failed": "I could not authenticate with the destination.",
-    "reference_not_usable": "That item can no longer be re-sent. Send the link again.",
-    "resend_not_supported": "This destination cannot re-send items.",
-    "no_provider_for_target": "There is no destination configured for that.",
-    "live_source_not_allowed": "Live streams are not supported.",
-    "playlist_not_allowed": "That link is a playlist. Send a link to a single item.",
-    "insufficient_disk_space": "There is not enough free space right now. Try again later.",
-    "delivery_target_unreachable": "I could not send it to this chat.",
-    "delivery_provider_error": "Sending failed. Try again in a few minutes.",
-    "downloader_not_configured": "Downloading is not enabled on this instance.",
-    "delivery_not_configured": "Sending is not enabled on this instance.",
-    "permission_denied": "You are not authorised to use this service.",
-    "quota_exceeded": "You have reached your limit for now.",
+    "format_unavailable": ("هذه الجودة لم تعد متاحة.\n\nأرسل الرابط مرة أخرى لقائمة جديدة."),
+    "provider_error": "الموقع يواجه مشكلة مؤقتة الآن.\n\nجرّب بعد دقائق.",
+    "download_failed": (
+        "لم يكتمل التحميل.\n\n" "جرّب بعد دقائق؛ إن تكرّر فالمصدر نفسه هو المشكلة."
+    ),
+    "download_timeout": "استغرق وقتًا أطول ممّا يجب فأوقفته.",
+    "download_cancelled": "تمّ الإلغاء.",
+    "size_limit_exceeded": "الملف أكبر ممّا أستطيع تحميله.",
+    "artifact_too_large": "الملف أكبر ممّا يقبله تلجرام هنا.",
+    "delivery_rate_limited": "تلجرام يطلب التمهّل. جرّب بعد قليل.",
+    "delivery_quota_exceeded": "لا يوجد متّسع لدى الوجهة الآن.",
+    "provider_unavailable": "الوجهة غير متاحة. جرّب بعد دقائق.",
+    "delivery_authentication_failed": "فشل التحقّق مع تلجرام.",
+    "reference_not_usable": ("لم يعد ممكنًا إعادة إرسال هذا الملف. أرسل الرابط من جديد."),
+    "resend_not_supported": "هذه الوجهة لا تدعم إعادة الإرسال.",
+    "no_provider_for_target": "لا توجد وجهة مضبوطة لهذا.",
+    "live_source_not_allowed": (
+        "البث المباشر غير مدعوم.\n\n" "انتظر انتهاء البث ثم أرسل رابط التسجيل."
+    ),
+    "playlist_not_allowed": (
+        "هذا الرابط قائمة وليس مقطعًا واحدًا.\n\n" "افتح المقطع الذي تريده وانسخ رابطه وحده."
+    ),
+    "insufficient_disk_space": (
+        "لا توجد مساحة كافية الآن.\n\n" "انتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
+    ),
+    "delivery_target_unreachable": "تعذّر الإرسال إلى هذه المحادثة.",
+    "delivery_provider_error": "فشل الإرسال. جرّب بعد دقائق.",
+    "downloader_not_configured": "التحميل غير مفعّل على هذه النسخة.",
+    "delivery_not_configured": "الإرسال غير مفعّل على هذه النسخة.",
+    "permission_denied": "غير مصرّح لك باستخدام هذه الخدمة.",
+    "quota_exceeded": "وصلت إلى حدّك المسموح حاليًا.",
 }
 
-GENERIC_ERROR: Final[str] = "Something went wrong. Please try again."
+GENERIC_ERROR: Final[str] = "حدث خطأ غير متوقّع. جرّب مرة أخرى، وإن تكرّر فأبلِغني بالرابط."
 
 
 def render_start(display_name: str | None) -> str:
     """Render the greeting."""
-    who = f", {display_name}" if display_name else ""
-    return (
-        f"Hello{who}. Send me a link and I will fetch it for you.\n\n"
-        "Use /help to see what I understand."
-    )
+    who = f" يا {display_name}" if display_name else ""
+    return f"أهلًا{who}. أرسل لي رابطًا وسأجلبه لك.\n\n" "اكتب /help لتعرف ما أفهمه."
 
 
 def render_help() -> str:
     """Render the command reference."""
     return (
-        "Send me a link and I will show you what is there, then ask which "
-        "quality you want.\n\n"
-        "/start — say hello\n"
-        "/help — this message\n"
-        "/settings — what this instance can do\n"
-        "/history — what you have fetched recently\n"
-        "/cookies — show the stored sign-in cookies (owner only)\n\n"
-        "Some sites — X, TikTok, private Instagram — show nothing to a "
-        "logged-out visitor. Send me a Netscape-format cookies.txt and I will "
-        "use it. I delete the message afterwards."
+        "أرسل لي رابطًا وسأجلبه بأعلى جودة متاحة تلقائيًا.\n\n"
+        "/start — تحية\n"
+        "/help — هذه الرسالة\n"
+        "/settings — ما تستطيعه هذه النسخة\n"
+        "/history — ما حمّلته مؤخرًا\n"
+        "/cookies — الكوكيز المحفوظة (للمالك فقط)\n\n"
+        "بعض المواقع — X وتيك توك وإنستقرام الخاص — لا تعرض شيئًا لزائر غير "
+        "مسجّل. أرسل لي ملف cookies.txt بصيغة Netscape وسأستخدمه.\n\n"
+        "لكل منصة ملفها المستقل: أرسل ملف كل منصة على حدة، وسأدمجه بجانب "
+        "البقية دون أن يمحوها. وأحذف رسالتك بعد الحفظ."
     )
 
 
@@ -164,15 +178,15 @@ def render_source(summary: SourceSummary, *, automatic: bool = False) -> str:
     lines.append(" · ".join(facts))
 
     if summary.is_live:
-        lines.append("\nThis is a live stream and cannot be fetched.")
+        lines.append("\nهذا بث مباشر ولا يمكن جلبه.")
     elif summary.is_playlist:
-        lines.append("\nThis link is a collection. Send a link to a single item.")
+        lines.append("\nهذا الرابط قائمة. أرسل رابط مقطع واحد.")
     elif not summary.qualities:
-        lines.append("\nNothing here can be fetched.")
+        lines.append("\nلا يوجد هنا ما يمكن جلبه.")
     elif automatic:
-        lines.append("\nFetching at the highest quality that will send…")
+        lines.append("\n⏳ جارٍ التحميل بأعلى جودة يمكن إرسالها…")
     else:
-        lines.append("\nChoose a quality:")
+        lines.append("\nاختر الجودة:")
 
     return "\n".join(lines)
 
@@ -184,7 +198,7 @@ def render_queued(title: str) -> str:
     the natural response to that is to send the link again - which is how a
     queue of one becomes a queue of three.
     """
-    return f"*{_escape(_clip(title, _MAX_TITLE))}*\nWaiting for a free slot…"
+    return f"*{_escape(_clip(title, _MAX_TITLE))}*\n⏸ في الانتظار حتى يفرغ مسار…"
 
 
 def render_progress(progress: DownloadProgress, *, title: str) -> str:
@@ -194,7 +208,7 @@ def render_progress(progress: DownloadProgress, *, title: str) -> str:
 
     if percent is None:
         detail = _bytes(progress.downloaded_bytes)
-        return f"{header}\n{progress.stage.value}… {detail}"
+        return f"{header}\n{_STAGE_LABELS.get(progress.stage.value, 'جارٍ')}… {detail}"
 
     filled = int(percent / 100 * _BAR_WIDTH)
     bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
@@ -204,9 +218,9 @@ def render_progress(progress: DownloadProgress, *, title: str) -> str:
     if progress.speed_bps:
         parts.append(f"{_bytes(int(progress.speed_bps))}/s")
     if progress.eta_seconds:
-        parts.append(f"~{_duration(progress.eta_seconds)} left")
+        parts.append(f"يتبقّى ~{_duration(progress.eta_seconds)}")
 
-    return f"{header}\n{' · '.join(parts)}"
+    return f"{header}\n⬇️ {' · '.join(parts)}"
 
 
 def render_delivery_progress(progress: DeliveryProgress, *, title: str) -> str:
@@ -220,31 +234,32 @@ def render_delivery_progress(progress: DeliveryProgress, *, title: str) -> str:
     percent = progress.percentage
 
     if percent is None:
-        return f"{header}\nSending… {_bytes(progress.sent_bytes)}"
+        return f"{header}\n⬆️ جارٍ الإرسال… {_bytes(progress.sent_bytes)}"
 
     filled = int(percent / 100 * _BAR_WIDTH)
     bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
     parts = [f"{bar} {percent:.0f}%"]
     if progress.total_bytes:
         parts.append(f"{_bytes(progress.sent_bytes)} / {_bytes(progress.total_bytes)}")
-    return f"{header}\nSending · {' · '.join(parts)}"
+    return f"{header}\n⬆️ إرسال · {' · '.join(parts)}"
 
 
 def render_delivered(summary: AcquisitionSummary) -> str:
     """Render the confirmation shown once the file has been sent."""
     return (
         f"*{_escape(_clip(summary.title, _MAX_TITLE))}*\n"
-        f"Sent · {summary.quality_label} · {_bytes(summary.bytes_delivered)} · "
-        f"{_duration(summary.elapsed_seconds)}"
+        f"✅ تم الإرسال · {summary.quality_label} · "
+        f"{_bytes(summary.bytes_delivered)} · {_duration(summary.elapsed_seconds)}\n"
+        "🗑 حُذفت النسخة من الجهاز."
     )
 
 
 def render_history(entries: Sequence[HistoryEntrySummary]) -> str:
     """Render a principal's recent acquisitions."""
     if not entries:
-        return "You have not fetched anything yet."
+        return "لم تحمّل شيئًا بعد."
 
-    lines = ["*Recent*"]
+    lines = ["*آخر ما حمّلت*"]
     lines.extend(
         f"• {_escape(_clip(entry.title, 60))} — {entry.quality_label} · "
         f"{_bytes(entry.bytes_delivered)} · {entry.delivered_at:%Y-%m-%d %H:%M} UTC"
@@ -255,14 +270,15 @@ def render_history(entries: Sequence[HistoryEntrySummary]) -> str:
 
 def render_settings(capabilities: CapabilitiesSummary) -> str:
     """Render what this instance can currently do."""
+    yes, no = "نعم", "لا"
     return (
-        "*This instance*\n"
-        f"Engine · {capabilities.engine} {capabilities.engine_version}\n"
-        f"Sends to · {capabilities.delivery_provider}\n"
-        f"Largest file · {_bytes(capabilities.effective_max_bytes)}\n"
-        f"Audio only · {'yes' if capabilities.supports_audio_only else 'no'}\n"
-        f"Live streams · {'yes' if capabilities.allow_live else 'no'}\n"
-        f"Playlists · {'yes' if capabilities.allow_playlist else 'no'}"
+        "*هذه النسخة*\n"
+        f"المحرّك · {capabilities.engine} {capabilities.engine_version}\n"
+        f"يرسل إلى · {capabilities.delivery_provider}\n"
+        f"أكبر ملف · {_bytes(capabilities.effective_max_bytes)}\n"
+        f"صوت فقط · {yes if capabilities.supports_audio_only else no}\n"
+        f"بث مباشر · {yes if capabilities.allow_live else no}\n"
+        f"القوائم · {yes if capabilities.allow_playlist else no}"
     )
 
 
@@ -292,10 +308,10 @@ def _duration(seconds: float) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
-        return f"{hours}h {minutes:02d}m"
+        return f"{hours}س {minutes:02d}د"
     if minutes:
-        return f"{minutes}m {secs:02d}s"
-    return f"{secs}s"
+        return f"{minutes}د {secs:02d}ث"
+    return f"{secs}ث"
 
 
 def _clip(text: str, limit: int) -> str:
@@ -389,16 +405,16 @@ def _session_advice(site: str, cookies: CookieSummary | None) -> str:
     if cookies is None:
         return _ADVICE_NO_JAR
     if _has_lapsed(cookies):
-        when = f"{cookies.earliest_expiry:%Y-%m-%d}" if cookies.earliest_expiry else "recently"
+        when = f"{cookies.earliest_expiry:%Y-%m-%d}" if cookies.earliest_expiry else "مؤخرًا"
         return (
-            f"⚠️ Your stored cookies expired on {when}. Send me a fresh export "
-            "from a signed-in browser."
+            f"⚠️ الكوكيز المحفوظة انتهت في {when}.\n"
+            "💡 الحل: صدّر ملفًا جديدًا من متصفح مسجّل الدخول وأرسله لي."
         )
     if site and not _covered_by(cookies, site):
-        covered = ", ".join(cookies.domains[:4]) or "nothing"
+        covered = "، ".join(cookies.domains[:4]) or "لا شيء"
         return (
-            f"My stored cookies cover {covered} — not {site}. Export a "
-            f"cookies.txt while {site} is open and send it to me."
+            f"الكوكيز المحفوظة تغطّي {covered} — وليس {site}.\n"
+            f"💡 الحل: صدّر cookies.txt و{site} مفتوح وأرسله لي."
         )
     # Covered but not signed in. This is the failure that otherwise has no
     # explanation at all: the jar lists the site, reports a healthy cookie
@@ -407,14 +423,14 @@ def _session_advice(site: str, cookies: CookieSummary | None) -> str:
     # nothing works.
     if site and not _is_signed_in(cookies, site):
         return (
-            f"⚠️ My cookies for {site} have no login session in them. The export "
-            "listed the site but left out the sign-in cookie — that usually "
-            "means the extension was set to skip httpOnly cookies. Export again "
-            "with those included, while signed in."
+            f"⚠️ الكوكيز المحفوظة لـ {site} لا تحتوي على جلسة دخول.\n\n"
+            "الملف يذكر الموقع لكنه لا يحمل كوكي تسجيل الدخول — غالبًا لأن "
+            "الإضافة كانت مضبوطة على تخطّي كوكيز httpOnly.\n\n"
+            "💡 الحل: صدّر الملف مرة أخرى مع تفعيل تضمين httpOnly، وأنت مسجّل دخول."
         )
     return (
-        "My cookies for this site may have stopped working. Send a fresh "
-        "export, or /cookies to see what is stored."
+        "قد تكون الكوكيز المحفوظة لهذا الموقع توقّفت عن العمل.\n"
+        "💡 الحل: أرسل ملفًا جديدًا، أو اكتب /cookies لترى المحفوظ."
     )
 
 
@@ -428,9 +444,9 @@ def _render_no_playable_media(base: str, *, site: str, cookies: CookieSummary | 
     """
     if site and _needs_session(site) and not _is_signed_in(cookies, site):
         return (
-            f"{base}\n\n⚠️ I also have no signed-in session for {site}. If you "
-            "expected a video here, a restricted one would look the same — "
-            "send me a fresh cookies.txt and try again."
+            f"{base}\n\n⚠️ وليس لديّ جلسة دخول لـ {site}. لو كنت تتوقّع فيديو "
+            "هنا، فالمقطع المقيّد يبدو بنفس الشكل تمامًا — أرسل لي ملف "
+            "cookies.txt محدّثًا وجرّب مرة أخرى."
         )
     return base
 
@@ -449,9 +465,9 @@ def _is_signed_in(cookies: CookieSummary | None, host: str) -> bool:
 
 
 _ADVICE_NO_JAR: Final[str] = (
-    "I have no sign-in cookies stored. Export a Netscape-format cookies.txt "
-    "from a browser that is signed in to this site and send me the file — "
-    "see /help."
+    "لا توجد كوكيز محفوظة عندي.\n"
+    "💡 الحل: صدّر ملف cookies.txt بصيغة Netscape من متصفح مسجّل الدخول "
+    "لهذا الموقع وأرسله لي — التفاصيل في /help."
 )
 
 
@@ -489,21 +505,22 @@ def render_cookie_status(summary: CookieSummary | None) -> str:
     """Describe the stored cookie jar."""
     if summary is None:
         return (
-            "No sign-in cookies stored.\n\n"
-            "Sites that hide media from logged-out visitors — X, TikTok, "
-            "private Instagram — will keep refusing. Send me a Netscape-format "
-            "cookies.txt to fix that."
+            "لا توجد كوكيز محفوظة.\n\n"
+            "المواقع التي تخفي محتواها عن الزائر غير المسجّل — X وتيك توك "
+            "وإنستقرام الخاص — ستستمر في الرفض.\n"
+            "💡 الحل: أرسل لي ملف cookies.txt بصيغة Netscape."
         )
 
     lines = [
-        "🍪 *Sign-in cookies stored*",
-        f"Cookies: {summary.cookie_count}",
-        f"Sites: {_sites(summary)}",
+        "🍪 *الكوكيز المحفوظة*",
+        f"عدد الكوكيز: {summary.cookie_count}",
+        f"المواقع: {_sites(summary)}",
         _signed_in_line(summary),
-        f"Updated: {summary.installed_at:%Y-%m-%d %H:%M} UTC",
+        f"آخر تحديث: {summary.installed_at:%Y-%m-%d %H:%M} UTC",
         _expiry_line(summary),
         "",
-        "Send a new file to replace it, or /cookies clear to remove it.",
+        "أرسل ملف منصة أخرى وسيُضاف بجانب الموجود دون أن يمحوه.",
+        "لحذف الكل: /cookies clear",
     ]
     return "\n".join(line for line in lines if line is not None)
 
@@ -522,12 +539,12 @@ def _signed_in_line(summary: CookieSummary) -> str:
         if any(domain == platform or domain.endswith(f".{platform}") for domain in summary.domains)
     ]
     if not known:
-        return "Signed in: nothing this bot recognises"
+        return "مسجّل الدخول في: لا شيء أعرفه"
     missing = [platform for platform in known if platform not in summary.signed_in]
-    signed = ", ".join(summary.signed_in) if summary.signed_in else "none"
+    signed = "، ".join(summary.signed_in) if summary.signed_in else "لا شيء"
     if not missing:
-        return f"Signed in: {signed}"
-    return f"Signed in: {signed}\n⚠️ No login session for: {', '.join(missing)}"
+        return f"✅ مسجّل الدخول في: {signed}"
+    return f"✅ مسجّل الدخول في: {signed}\n" f"⚠️ بلا جلسة دخول: {'، '.join(missing)}"
 
 
 def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:
@@ -538,16 +555,13 @@ def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:
     still cannot fetch X".
     """
     lines = [
-        "✅ *Sign-in cookies updated*",
-        f"Cookies: {summary.cookie_count}",
-        f"Sites: {_sites(summary)}",
+        "✅ *تم تحديث الكوكيز*",
+        f"عدد الكوكيز: {summary.cookie_count}",
+        f"المواقع: {_sites(summary)}",
+        _signed_in_line(summary),
         _expiry_line(summary),
         "",
-        (
-            "I deleted your upload."
-            if removed
-            else "⚠️ I could not delete your upload — please delete it yourself."
-        ),
+        ("🗑 حذفت الملف الذي أرسلته." if removed else "⚠️ لم أستطع حذف ملفك — احذفه بنفسك."),
     ]
     return "\n".join(line for line in lines if line is not None)
 
@@ -555,16 +569,16 @@ def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:
 def render_cookies_discarded(*, removed: bool) -> str:
     """Confirm the jar is gone."""
     if removed:
-        return "Sign-in cookies removed. I will browse anonymously from now on."
-    return "There were no sign-in cookies stored."
+        return "🗑 حُذفت الكوكيز. سأتصفّح بدون تسجيل دخول من الآن."
+    return "لا توجد كوكيز محفوظة أصلًا."
 
 
 def render_cookie_too_large(declared: int, limit: int) -> str:
     """Refuse an upload before any of it is transferred."""
     return (
-        f"That file is {_bytes(declared)} and I accept up to {_bytes(limit)}. "
-        "A cookies.txt is normally a few kilobytes — check you exported "
-        "cookies rather than something else."
+        f"حجم الملف {_bytes(declared)} والحد المسموح {_bytes(limit)}.\n\n"
+        "ملف الكوكيز عادةً بضعة كيلوبايت — تأكد أنك صدّرت الكوكيز "
+        "وليس شيئًا آخر."
     )
 
 
@@ -572,10 +586,10 @@ def _sites(summary: CookieSummary) -> str:
     """Render the domains a jar covers, bounded so it stays readable."""
     shown = summary.domains[:_MAX_SITES_SHOWN]
     if not shown:
-        return "unknown"
+        return "غير معروفة"
     extra = len(summary.domains) - len(shown)
-    suffix = f" (+{extra} more)" if extra else ""
-    return ", ".join(shown) + suffix
+    suffix = f" (+{extra} أخرى)" if extra else ""
+    return "، ".join(shown) + suffix
 
 
 def _expiry_line(summary: CookieSummary) -> str | None:
@@ -588,5 +602,7 @@ def _expiry_line(summary: CookieSummary) -> str | None:
         return None
     days = (summary.earliest_expiry - datetime.now(UTC)).days
     if days < 0:
-        return "⚠️ The first cookie has already expired — send a fresh export."
-    return f"First expiry: in {days} day{'s' if days != 1 else ''}"
+        return "⚠️ أول كوكي انتهت صلاحيته — أرسل تصديرًا جديدًا."
+    if days == 0:
+        return "⚠️ أول انتهاء: اليوم"
+    return f"أول انتهاء: بعد {days} يومًا"

@@ -156,13 +156,13 @@ class TestKeyboards:
         markup = quality_keyboard((QualityOption(key="best", label="Best"),), token="t1")
 
         labels = [button["text"] for row in markup["inline_keyboard"] for button in row]
-        assert "Cancel" in labels
+        assert "إلغاء" in labels
 
     def test_abort_keyboard_has_one_button(self) -> None:
         markup = abort_keyboard("t1")
 
         assert len(markup["inline_keyboard"]) == 1
-        assert markup["inline_keyboard"][0][0]["text"] == "Stop"
+        assert markup["inline_keyboard"][0][0]["text"] == "إيقاف"
 
     @pytest.mark.parametrize(
         "raw",
@@ -250,19 +250,19 @@ class TestFormatters:
 
         assert "A Test Video" in text
         assert "testsite" in text
-        assert "2m 05s" in text
-        assert "Choose a quality" in text
+        assert "2د 05ث" in text
+        assert "اختر الجودة" in text
 
     def test_a_live_source_says_so(self) -> None:
         text = formatters.render_source(summary(is_live=True))
 
-        assert "live stream" in text.lower()
-        assert "Choose a quality" not in text
+        assert "بث مباشر" in text
+        assert "اختر الجودة" not in text
 
     def test_a_playlist_says_so(self) -> None:
         text = formatters.render_source(summary(is_playlist=True))
 
-        assert "collection" in text.lower()
+        assert "قائمة" in text
 
     def test_titles_cannot_break_the_message(self) -> None:
         text = formatters.render_source(summary(title="*bold* _under_ `code` [link]"))
@@ -289,7 +289,7 @@ class TestFormatters:
 
         assert "50%" in text
         assert "█" in text
-        assert "30s left" in text
+        assert "يتبقّى ~30ث" in text
 
     def test_progress_without_a_total_still_renders(self) -> None:
         text = formatters.render_progress(
@@ -313,12 +313,12 @@ class TestFormatters:
             )
         )
 
-        assert "Sent" in text
+        assert "تم الإرسال" in text
         assert "720p" in text
-        assert "42s" in text
+        assert "42ث" in text
 
     def test_renders_empty_history(self) -> None:
-        assert "not fetched anything" in formatters.render_history(())
+        assert "لم تحمّل شيئًا" in formatters.render_history(())
 
     def test_renders_history_entries(self) -> None:
         text = formatters.render_history(
@@ -357,10 +357,14 @@ class TestFormatters:
     @pytest.mark.parametrize(
         ("code", "expected"),
         [
-            ("metadata_unavailable", "private"),
-            ("artifact_too_large", "too large"),
-            ("permission_denied", "not authorised"),
-            ("download_cancelled", "Cancelled"),
+            # Each pair is a code and a phrase that must survive translation:
+            # the message has to name the cause, not merely report a failure.
+            ("metadata_unavailable", "خاصًّا"),
+            ("artifact_too_large", "أكبر"),
+            ("permission_denied", "غير مصرّح"),
+            ("download_cancelled", "تمّ الإلغاء"),
+            ("no_playable_media", "صور فقط"),
+            ("connection_blocked", "حجب في الشبكة"),
         ],
     )
     def test_known_error_codes_get_useful_text(self, code: str, expected: str) -> None:

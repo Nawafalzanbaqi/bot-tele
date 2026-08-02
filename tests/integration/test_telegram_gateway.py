@@ -148,7 +148,7 @@ async def test_a_link_becomes_a_delivered_file_and_an_empty_disk(
 
     prompt = messenger.sent[-1]
     assert "A Test Video" in prompt.text
-    assert "2m 05s" in prompt.text
+    assert "2د 05ث" in prompt.text
     assert prompt.reply_markup is not None
     buttons = [
         button
@@ -180,7 +180,7 @@ async def test_a_link_becomes_a_delivered_file_and_an_empty_disk(
     assert entries[0].url == URL
 
     # 5. The user was told, and the local copy is gone.
-    assert "Sent" in messenger.last_text
+    assert "تم الإرسال" in messenger.last_text
     assert list(root.iterdir()) == [], "no lease may survive a completed acquisition"
 
 
@@ -226,7 +226,7 @@ async def test_a_stranger_is_refused_and_nothing_happens(workspace_root: Path) -
 
     await gateway.poll_once()
 
-    assert "not authorised" in messenger.last_text
+    assert "غير مصرّح" in messenger.last_text
     assert uploader.uploads == []
     assert await journal.recent("telegram:1234") == ()
     assert not root.exists() or list(root.iterdir()) == []

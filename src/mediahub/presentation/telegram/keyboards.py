@@ -124,7 +124,7 @@ def quality_keyboard(
     rows.append(
         [
             {
-                "text": "Cancel",
+                "text": "إلغاء",
                 "callback_data": CallbackPayload(
                     action=CallbackAction.DISMISS, token=token, choice=CANCEL_KEY
                 ).encode(),
@@ -140,7 +140,7 @@ def abort_keyboard(token: str) -> dict[str, Any]:
         "inline_keyboard": [
             [
                 {
-                    "text": "Stop",
+                    "text": "إيقاف",
                     "callback_data": CallbackPayload(
                         action=CallbackAction.ABORT, token=token
                     ).encode(),

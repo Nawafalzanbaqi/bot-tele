@@ -271,7 +271,7 @@ class TestCommands:
 
         await handle(handlers, message_update("/start"))
 
-        assert "Hello" in messenger.last_text
+        assert "أهلًا" in messenger.last_text
         assert "ada" in messenger.last_text
 
     async def test_help_lists_the_commands(self, messenger: FakeMessenger) -> None:
@@ -338,7 +338,7 @@ class TestUrlFlow:
         labels = [
             button["text"] for row in posted.reply_markup["inline_keyboard"] for button in row
         ]
-        assert labels == ["Best available", "720p", "Cancel"]
+        assert labels == ["Best available", "720p", "إلغاء"]
 
     async def test_non_links_get_help_without_probing(self, messenger: FakeMessenger) -> None:
         probe = FakeProbe()
@@ -365,7 +365,7 @@ class TestUrlFlow:
         await handle(handlers, message_update(URL))
 
         assert URL not in messenger.last_text
-        assert "private" in messenger.last_text.lower()
+        assert "خاص" in messenger.last_text
 
 
 # --------------------------------------------------------------------------- #
@@ -396,7 +396,7 @@ class TestButtons:
         assert acquire.commands[0].quality_key == "h720"
         assert acquire.commands[0].url == URL
         assert acquire.commands[0].requested_by == "telegram:4242"
-        assert "Sent" in messenger.last_text
+        assert "تم الإرسال" in messenger.last_text
 
     async def test_the_delivery_target_names_this_chat(self, messenger: FakeMessenger) -> None:
         acquire = FakeAcquire()
@@ -432,7 +432,7 @@ class TestButtons:
         await handlers.drain(timeout=5)
 
         assert acquire.delivery_updates == 1
-        assert any("Sending · " in edit.text and "75%" in edit.text for edit in messenger.edits)
+        assert any("إرسال · " in edit.text and "75%" in edit.text for edit in messenger.edits)
 
     async def test_cancel_dismisses_the_prompt(self, messenger: FakeMessenger) -> None:
         handlers, services = build(messenger)
@@ -440,7 +440,7 @@ class TestButtons:
 
         await handle(handlers, callback_update(f"d|{token}|x"))
 
-        assert messenger.edits[-1].text == "Cancelled."
+        assert messenger.edits[-1].text == "تمّ الإلغاء."
         assert services.sessions.get(token, owner="telegram:4242") is None
 
     async def test_stop_reaches_the_running_acquisition(self, messenger: FakeMessenger) -> None:
@@ -463,14 +463,14 @@ class TestButtons:
         await handle(handlers, callback_update("q|deadbeef|best"))
 
         assert messenger.answers[-1][1] is not None
-        assert "expired" in messenger.answers[-1][1]
+        assert "انتهت صلاحية" in messenger.answers[-1][1]
 
     async def test_a_malformed_payload_is_ignored(self, messenger: FakeMessenger) -> None:
         handlers, _ = build(messenger)
 
         await handle(handlers, callback_update("!!!"))
 
-        assert "no longer valid" in (messenger.answers[-1][1] or "")
+        assert "لم يعد صالح" in (messenger.answers[-1][1] or "")
 
     async def test_another_principal_cannot_drive_the_session(
         self, messenger: FakeMessenger
@@ -506,7 +506,7 @@ class TestButtons:
         await handlers.drain(timeout=5)
 
         assert "secret internal detail" not in messenger.last_text
-        assert "went wrong" in messenger.last_text
+        assert "خطأ" in messenger.last_text
 
 
 # --------------------------------------------------------------------------- #
@@ -524,7 +524,7 @@ class TestAuthorisation:
         await handle(handlers, message_update(URL))
 
         assert probe.calls == [], "a denied sender must not reach any use case"
-        assert "not authorised" in messenger.last_text
+        assert "غير مصرّح" in messenger.last_text
 
     async def test_every_intent_is_authorised(self, messenger: FakeMessenger) -> None:
         authorize = FakeAuthorize()
@@ -596,7 +596,7 @@ class TestProgressPresenter:
         await presenter.stop()
 
         assert len(messenger.edits) == 1
-        assert "Sending · " in messenger.edits[0].text
+        assert "إرسال · " in messenger.edits[0].text
         assert "50%" in messenger.edits[0].text
 
     async def test_a_failing_edit_never_propagates(self, messenger: FakeMessenger) -> None:
@@ -717,7 +717,7 @@ class TestCookieUpload:
 
         await handle(handlers, document_update())
 
-        assert "Sign-in cookies updated" in messenger.last_text
+        assert "تم تحديث الكوكيز" in messenger.last_text
         assert "x.com" in messenger.last_text
 
     async def test_the_upload_is_deleted_from_the_conversation(self) -> None:
@@ -739,7 +739,7 @@ class TestCookieUpload:
 
         await handle(handlers, document_update())
 
-        assert "delete it yourself" in messenger.last_text
+        assert "احذفه بنفسك" in messenger.last_text
 
     async def test_a_file_that_is_not_a_jar_is_refused_with_a_usable_message(self) -> None:
         messenger = FakeMessenger()
@@ -757,7 +757,7 @@ class TestCookieUpload:
 
         await handle(handlers, document_update(file_size=50 * 1024 * 1024))
 
-        assert "accept up to" in messenger.last_text
+        assert "الحد المسموح" in messenger.last_text
         assert messenger.files == {}, "nothing should have been fetched"
 
     async def test_the_jar_is_never_echoed_back(self) -> None:
@@ -778,7 +778,7 @@ class TestCookieUpload:
 
         await handle(handlers, message_update("/cookies", update_id=20))
 
-        assert "Sign-in cookies stored" in messenger.last_text
+        assert "الكوكيز المحفوظة" in messenger.last_text
 
     async def test_cookies_clear_removes_them(self) -> None:
         messenger = FakeMessenger()
@@ -788,7 +788,7 @@ class TestCookieUpload:
 
         await handle(handlers, message_update("/cookies clear", update_id=21))
 
-        assert "removed" in messenger.last_text
+        assert "حُذفت" in messenger.last_text
 
 
 class TestFailureExplainsItself:
@@ -805,7 +805,7 @@ class TestFailureExplainsItself:
 
         await handle(handlers, message_update("https://x.com/someone/status/123"))
 
-        assert "no sign-in cookies stored" in messenger.last_text.lower()
+        assert "لا توجد كوكيز محفوظة" in messenger.last_text
 
     async def test_with_cookies_stored_it_suggests_they_lapsed(self) -> None:
         """A different cause needs a different action."""
@@ -817,10 +817,7 @@ class TestFailureExplainsItself:
 
         await handle(handlers, message_update("https://x.com/someone/status/123", update_id=30))
 
-        assert (
-            "not x.com" in messenger.last_text.lower()
-            or "may have stopped" in messenger.last_text.lower()
-        )
+        assert "وليس x.com" in messenger.last_text or "توقّفت عن العمل" in messenger.last_text
 
     async def test_a_jar_that_covers_the_site_but_holds_no_session_says_so(self) -> None:
         """The failure that otherwise has no explanation at all.
@@ -841,8 +838,8 @@ class TestFailureExplainsItself:
 
         await handle(handlers, message_update("https://x.com/someone/status/123", update_id=31))
 
-        assert "no login session" in messenger.last_text.lower()
-        assert "httponly" in messenger.last_text.lower()
+        assert "لا تحتوي على جلسة دخول" in messenger.last_text
+        assert "httpOnly" in messenger.last_text
 
     async def test_a_photo_only_post_is_not_blamed_on_cookies(self) -> None:
         """A signed-in jar means the post really is just photos - say that."""
@@ -855,7 +852,7 @@ class TestFailureExplainsItself:
         await handle(handlers, message_update("https://x.com/someone/status/123", update_id=32))
 
         text = messenger.last_text.lower()
-        assert "photos only" in text
+        assert "صور فقط" in text
         assert "cookies.txt" not in text, "a signed-in session makes cookie advice noise"
 
     async def test_an_ordinary_site_gets_no_cookie_advice(self) -> None:
@@ -901,7 +898,7 @@ class TestFailureExplainsItself:
         await handle(handlers, document_update(message_id=9))
 
         confirmation = messenger.sent[-1]
-        assert "Sign-in cookies updated" in confirmation.text
+        assert "تم تحديث الكوكيز" in confirmation.text
         assert confirmation.reply_to_message_id is None
 
     async def test_it_still_replies_when_the_upload_survived(self) -> None:
@@ -952,7 +949,7 @@ class TestConcurrencyIsBounded:
         await handle(handlers, message_update(URL, update_id=201))
         await asyncio.sleep(0.05)
 
-        assert any("Waiting for a free slot" in text for text in messenger.texts())
+        assert any("في الانتظار" in text for text in messenger.texts())
 
         acquire.gate.set()
         await asyncio.sleep(0.05)

@@ -140,7 +140,7 @@ class TestAllowList:
 
         assert len(messenger.sent) == 1
         text = messenger.sent[0].text
-        assert "not authorised" in text
+        assert "غير مصرّح" in text
         assert "/history" not in text, "a refusal must not advertise the command set"
 
     async def test_an_empty_allow_list_admits_nobody(self) -> None:

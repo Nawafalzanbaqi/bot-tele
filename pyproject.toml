@@ -134,7 +134,13 @@ ignore = [
 # long-poll timeout is a Bot API parameter sent to the server, not an asyncio
 # deadline, and a drain budget is a deliberate part of the shutdown contract.
 "src/mediahub/presentation/telegram/api.py" = ["ASYNC109"]
-"src/mediahub/presentation/telegram/handlers.py" = ["ASYNC109"]
+"src/mediahub/presentation/telegram/handlers.py" = ["ASYNC109", "RUF001", "RUF003"]
+# RUF001-003 flag characters that could be a Latin letter in disguise - the
+# homoglyph trick used to smuggle a lookalike identifier past review. These two
+# modules exist to hold the Arabic the bot replies in, where every one of those
+# characters is the intended letter and the warning is noise on every line.
+"src/mediahub/presentation/telegram/formatters.py" = ["RUF001", "RUF002", "RUF003"]
+"src/mediahub/presentation/telegram/keyboards.py" = ["RUF001", "RUF003"]
 "src/mediahub/infrastructure/delivery/telegram/client.py" = ["ASYNC109"]
 
 [tool.ruff.lint.pydocstyle]
