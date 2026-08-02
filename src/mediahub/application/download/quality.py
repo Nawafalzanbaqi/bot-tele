@@ -208,16 +208,19 @@ def _is_compatible(video: VideoFormat) -> bool:
 def _merge_audio_bytes(metadata: MediaMetadata) -> int:
     """Return the size of the audio track a merge would attach.
 
-    The *smallest* known audio rendition, not the best. Two reasons, and they
-    point the same way: the engine's fallback picks whatever audio fits, and a
-    size shown to a person should err towards being beaten rather than missed.
+    The **largest** known audio rendition, because that is the one that gets
+    attached: the merge asks for the best audio available, so quoting a smaller
+    stream describes a download that will not happen. Measured against a real
+    source, assuming the smallest understated the total by 4% - which is both
+    wrong and, near a hard upload ceiling, wrong in the dangerous direction.
+
     Zero when nothing declares a size, which keeps an unknown from being
     presented as a certainty.
     """
     sizes = [
         audio.filesize_bytes for audio in metadata.audio_formats if audio.filesize_bytes is not None
     ]
-    return min(sizes) if sizes else 0
+    return max(sizes) if sizes else 0
 
 
 def _delivered_bytes(video_bytes: int | None, has_audio: bool, audio_overhead: int) -> int | None:

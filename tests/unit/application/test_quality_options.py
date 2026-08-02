@@ -234,8 +234,13 @@ class TestSizesAreDeliveredSizes:
 
         assert next(o for o in options if o.key == "h1080").approx_bytes is None
 
-    def test_the_smallest_audio_is_assumed_not_the_largest(self) -> None:
-        """The engine's fallback takes what fits; an estimate should be beatable."""
+    def test_the_audio_the_merge_will_take_is_the_one_counted(self) -> None:
+        """The merge asks for the *best* audio, so that is what arrives.
+
+        Measured against a real source, assuming the smallest understated the
+        total by 4% - wrong, and near a hard upload ceiling wrong in the
+        direction that admits a download which then fails.
+        """
         options = build_quality_options(
             metadata(
                 video_formats=(video(1080, 40_000_000),),
@@ -247,7 +252,7 @@ class TestSizesAreDeliveredSizes:
             allow_merge=True,
         )
 
-        assert next(o for o in options if o.key == "h1080").approx_bytes == 43_000_000
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 49_000_000
 
     def test_a_rung_uses_a_sibling_that_knows_its_size(self) -> None:
         """Observed on YouTube: the first 1080p listed declares no size.
