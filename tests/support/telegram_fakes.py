@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from mediahub.application.credentials.errors import InvalidCookieJarError
+from mediahub.application.credentials.ports import CookieSummary
+from mediahub.infrastructure.credentials.cookie_jar import decode, parse
 from mediahub.infrastructure.delivery.telegram.client import UploadedMedia
 
 if TYPE_CHECKING:
@@ -54,6 +58,10 @@ class FakeMessenger:
         self.poll_calls: list[int | None] = []
         self.next_message_id = 100
         self.edit_error: Exception | None = None
+        self.files: dict[str, bytes] = {}
+        self.download_error: Exception | None = None
+        self.deleted: list[tuple[str, int]] = []
+        self.delete_allowed = True
 
     async def get_updates(
         self, *, offset: int | None = None, timeout: int = 30
@@ -92,6 +100,23 @@ class FakeMessenger:
     async def answer_callback(self, *, callback_id: str, text: str | None = None) -> None:
         """Record a callback acknowledgement."""
         self.answers.append((callback_id, text))
+
+    async def download_file(self, *, file_id: str, max_bytes: int) -> bytes:
+        """Return a queued file, enforcing the ceiling the real client does."""
+        if self.download_error is not None:
+            raise self.download_error
+        payload = self.files.get(file_id, b"")
+        if len(payload) > max_bytes:
+            message = f"that file is {len(payload)} bytes; the limit is {max_bytes}"
+            raise ValueError(message)
+        return payload
+
+    async def delete_message(self, *, chat_id: str, message_id: int) -> bool:
+        """Record a deletion, or report that Telegram refused one."""
+        if not self.delete_allowed:
+            return False
+        self.deleted.append((chat_id, message_id))
+        return True
 
     # -- Assertions helpers --------------------------------------------------
 
@@ -243,5 +268,78 @@ def callback_update(
                 "message_id": message_id,
                 "chat": {"id": chat_id, "type": "private"},
             },
+        },
+    }
+
+
+class FakeCookieStore:
+    """An in-memory cookie jar, validated the way the real store validates.
+
+    Shares the real parser deliberately: a fake that accepted anything would
+    let the handler tests pass while the only interesting behaviour - refusing
+    a file that is not a jar - went untested.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing stored."""
+        self.content: bytes | None = None
+        self.installs = 0
+
+    async def install(self, content: bytes) -> CookieSummary:
+        """Validate and keep the jar in memory."""
+        try:
+            parsed = parse(decode(content))
+        except ValueError as exc:
+            raise InvalidCookieJarError(str(exc)) from exc
+        if parsed.cookie_count == 0:
+            message = "no cookies found in that file"
+            raise InvalidCookieJarError(message)
+
+        self.content = content
+        self.installs += 1
+        return CookieSummary(
+            cookie_count=parsed.cookie_count,
+            domains=parsed.domains,
+            earliest_expiry=parsed.earliest_expiry,
+            installed_at=datetime.now(UTC),
+            size_bytes=len(content),
+        )
+
+    async def describe(self) -> CookieSummary | None:
+        """Return what is held, or nothing."""
+        if self.content is None:
+            return None
+        return await self.install(self.content)
+
+    async def discard(self) -> bool:
+        """Forget the jar, reporting whether there was one."""
+        had = self.content is not None
+        self.content = None
+        return had
+
+
+def document_update(
+    *,
+    file_id: str = "FILE-1",
+    file_name: str = "cookies.txt",
+    file_size: int = 512,
+    update_id: int = 3,
+    user_id: int = 4242,
+    chat_id: int = 4242,
+    message_id: int = 9,
+) -> dict[str, Any]:
+    """Build an attached-file update."""
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": message_id,
+            "document": {
+                "file_id": file_id,
+                "file_name": file_name,
+                "file_size": file_size,
+                "mime_type": "text/plain",
+            },
+            "from": {"id": user_id, "is_bot": False, "first_name": "Ada", "username": "ada"},
+            "chat": {"id": chat_id, "type": "private"},
         },
     }

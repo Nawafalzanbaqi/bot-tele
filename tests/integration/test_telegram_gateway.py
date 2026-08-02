@@ -18,6 +18,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mediahub.application.access.use_cases.authorize_principal import AuthorizePrincipal
+from mediahub.application.credentials.use_cases.manage_cookies import (
+    DescribeCookies,
+    DiscardCookies,
+    InstallCookies,
+)
 from mediahub.application.download.use_cases.acquire_media import AcquireMedia
 from mediahub.application.download.use_cases.describe_capabilities import (
     DescribeCapabilities,
@@ -44,6 +49,7 @@ from mediahub.presentation.telegram.handlers import (
 from mediahub.presentation.telegram.sessions import SessionStore
 from mediahub.shared.config.settings import DownloadSettings
 from tests.support.telegram_fakes import (
+    FakeCookieStore,
     FakeMessenger,
     FakeUploader,
     callback_update,
@@ -93,6 +99,7 @@ def build_stack(
         default_provider=DELIVERY_PROVIDER,
     )
 
+    cookie_store = FakeCookieStore()
     handlers = TelegramHandlers(
         GatewayServices(
             messenger=messenger,
@@ -118,6 +125,9 @@ def build_stack(
                 downloader=engine, delivery=delivery, max_item_bytes=100 * 1024 * 1024
             ),
             sessions=SessionStore(),
+            install_cookies=InstallCookies(store=cookie_store),
+            describe_cookies=DescribeCookies(store=cookie_store),
+            discard_cookies=DiscardCookies(store=cookie_store),
             progress_interval_seconds=0.0,
         )
     )

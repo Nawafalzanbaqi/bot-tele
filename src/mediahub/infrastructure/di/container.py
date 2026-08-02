@@ -28,6 +28,11 @@ from loguru import logger
 from sqlalchemy import text
 
 from mediahub.application.access.use_cases.authorize_principal import AuthorizePrincipal
+from mediahub.application.credentials.use_cases.manage_cookies import (
+    DescribeCookies,
+    DiscardCookies,
+    InstallCookies,
+)
 from mediahub.application.download.use_cases.acknowledge_cancellation import (
     AcknowledgeCancellation,
 )
@@ -57,6 +62,7 @@ from mediahub.application.workspace.use_cases.recover_workspaces import RecoverW
 from mediahub.domain.access.policies import AllowListPolicy, AuthorizationPolicy
 from mediahub.domain.sources.policies import UrlPolicy
 from mediahub.domain.workspace.policies import RecoveryPolicy
+from mediahub.infrastructure.credentials.filesystem_store import FilesystemCookieStore
 from mediahub.infrastructure.delivery.dummy.provider import DummyDeliveryProvider
 from mediahub.infrastructure.delivery.registry import (
     DEFAULT_PRIORITY,
@@ -90,6 +96,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.access.ports import AuditSink
     from mediahub.application.common.ports import Clock, EventPublisher, UuidGenerator
     from mediahub.application.common.unit_of_work import UnitOfWorkFactory
+    from mediahub.application.credentials.ports import CookieStore
     from mediahub.application.delivery.ports import DeliveryProvider, DeliveryRouter
     from mediahub.application.download.journal import AcquisitionJournal
     from mediahub.application.download.ports import DownloaderPort
@@ -128,6 +135,7 @@ class Container:
     job_queue: JobQueue | None = None
     journal: AcquisitionJournal = field(default_factory=InMemoryAcquisitionJournal)
     audit: AuditSink = field(default_factory=LoggingAuditSink)
+    cookies: CookieStore = field(default_factory=lambda: FilesystemCookieStore(None))
     allow_list: AllowListPolicy = field(default_factory=AllowListPolicy)
     authorization: AuthorizationPolicy = field(default_factory=AuthorizationPolicy)
 
@@ -362,6 +370,18 @@ class Container:
             cooldown_seconds=self.settings.delivery.cooldown_seconds,
         )
 
+    def install_cookies_use_case(self) -> InstallCookies:
+        """Build the "replace the jar the engine presents" use case."""
+        return InstallCookies(store=self.cookies)
+
+    def describe_cookies_use_case(self) -> DescribeCookies:
+        """Build the "what is installed?" use case."""
+        return DescribeCookies(store=self.cookies)
+
+    def discard_cookies_use_case(self) -> DiscardCookies:
+        """Build the "browse anonymously again" use case."""
+        return DiscardCookies(store=self.cookies)
+
     def get_history_use_case(self) -> GetHistory:
         """Build the "what have I fetched?" use case."""
         return GetHistory(journal=self.journal)
@@ -508,6 +528,7 @@ def build_container(settings: Settings) -> Container:
         database=database,
         job_queue=job_queue,
         journal=journal,
+        cookies=FilesystemCookieStore(settings.download.cookies_file),
         audit=LoggingAuditSink(),
         allow_list=_build_allow_list(settings),
         authorization=AuthorizationPolicy(),

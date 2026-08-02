@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 MAX_TEXT_LENGTH: Final[int] = 4096
 MAX_NAME_LENGTH: Final[int] = 64
 MAX_CALLBACK_LENGTH: Final[int] = 64
+MAX_FILE_ID_LENGTH: Final[int] = 256
 
 
 class IntentKind(StrEnum):
@@ -30,11 +31,14 @@ class IntentKind(StrEnum):
         COMMAND: A slash command such as ``/help``.
         TEXT: Free text, which the gateway treats as a candidate source.
         CALLBACK: An inline button press.
+        DOCUMENT: An attached file. The only file the gateway accepts is a
+            cookie jar, and only from an owner.
     """
 
     COMMAND = "command"
     TEXT = "text"
     CALLBACK = "callback"
+    DOCUMENT = "document"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +69,11 @@ class Intent:
         callback_id: Identifier to acknowledge, for ``CALLBACK``.
         callback_data: The button's payload, for ``CALLBACK``.
         update_id: Telegram's sequence number, used for de-duplication.
+        file_id: Telegram's handle for an attachment, for ``DOCUMENT``.
+        file_name: The attachment's claimed name. Attacker-controlled; shown
+            back to the sender and never used as a path.
+        file_size: The attachment's declared size. Also attacker-controlled, so
+            it is worth a cheap rejection but never a guarantee.
     """
 
     kind: IntentKind
@@ -77,6 +86,9 @@ class Intent:
     text: str | None = None
     callback_id: str | None = None
     callback_data: str | None = None
+    file_id: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
 
 
 def parse_update(update: Mapping[str, Any]) -> Intent | None:
@@ -125,14 +137,21 @@ def _parse_callback(callback: Mapping[str, Any], update_id: int) -> Intent | Non
 
 
 def _parse_message(message: Mapping[str, Any], update_id: int) -> Intent | None:
-    """Parse a text message or a slash command."""
+    """Parse a text message, a slash command, or an attached file."""
     sender = _sender(message.get("from"))
     chat_id = _chat_id(message.get("chat"))
-    text = _text(message.get("text"), MAX_TEXT_LENGTH)
-    if sender is None or chat_id is None or not text:
+    if sender is None or chat_id is None:
         return None
 
     message_id = _int(message.get("message_id"))
+
+    document = message.get("document")
+    if isinstance(document, dict):
+        return _parse_document(document, sender, chat_id, update_id, message_id)
+
+    text = _text(message.get("text"), MAX_TEXT_LENGTH)
+    if not text:
+        return None
 
     if text.startswith("/"):
         head, _, tail = text.partition(" ")
@@ -156,6 +175,34 @@ def _parse_message(message: Mapping[str, Any], update_id: int) -> Intent | None:
         update_id=update_id,
         message_id=message_id,
         text=text,
+    )
+
+
+def _parse_document(
+    document: Mapping[str, Any],
+    sender: Sender,
+    chat_id: str,
+    update_id: int,
+    message_id: int | None,
+) -> Intent | None:
+    """Parse an attached file.
+
+    The name is carried only so it can be echoed back to whoever sent it; it is
+    never used to build a path. What the file *is* gets decided by reading it,
+    not by trusting an extension somebody else chose.
+    """
+    file_id = _text(document.get("file_id"), MAX_FILE_ID_LENGTH)
+    if file_id is None:
+        return None
+    return Intent(
+        kind=IntentKind.DOCUMENT,
+        sender=sender,
+        chat_id=chat_id,
+        update_id=update_id,
+        message_id=message_id,
+        file_id=file_id,
+        file_name=_text(document.get("file_name"), MAX_NAME_LENGTH),
+        file_size=_int(document.get("file_size")),
     )
 
 

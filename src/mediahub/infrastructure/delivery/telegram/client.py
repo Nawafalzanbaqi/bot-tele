@@ -31,6 +31,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from loguru import logger
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterator, Sequence
     from pathlib import Path
@@ -229,6 +231,41 @@ class PythonTelegramBotClient:
     ) -> None:  # pragma: no cover - requires the network
         """Acknowledge a button press so the client stops spinning."""
         await self._bot.answer_callback_query(callback_query_id=callback_id, text=text)
+
+    async def download_file(
+        self, *, file_id: str, max_bytes: int
+    ) -> bytes:  # pragma: no cover - requires the network
+        """Fetch a small uploaded file into memory.
+
+        The size is checked against what Telegram reports **before** any bytes
+        are transferred, so an oversized upload costs one metadata call rather
+        than a download. The check is repeated afterwards because the declared
+        size comes from the other side and a declared size can lie.
+        """
+        handle = await self._bot.get_file(file_id)
+        declared = handle.file_size or 0
+        if declared > max_bytes:
+            message = f"that file is {declared} bytes; the limit is {max_bytes}"
+            raise ValueError(message)
+
+        payload = bytes(await handle.download_as_bytearray())
+        if len(payload) > max_bytes:
+            message = f"that file is {len(payload)} bytes; the limit is {max_bytes}"
+            raise ValueError(message)
+        return payload
+
+    async def delete_message(
+        self, *, chat_id: str, message_id: int
+    ) -> bool:  # pragma: no cover - requires the network
+        """Remove a message, reporting whether Telegram allowed it."""
+        try:
+            return bool(await self._bot.delete_message(chat_id=chat_id, message_id=message_id))
+        except Exception:
+            # Telegram limits how long a bot may delete a message, and refuses
+            # outright in some chats. The caller has a fallback: telling the
+            # user to delete it themselves.
+            logger.opt(exception=True).debug("Could not delete a message")
+            return False
 
     # -- Uploader surface (used by the delivery provider) -------------------
 

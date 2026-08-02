@@ -56,3 +56,24 @@ class TelegramMessenger(Protocol):
     async def answer_callback(self, *, callback_id: str, text: str | None = None) -> None:
         """Acknowledge a button press so the client stops spinning."""
         ...
+
+    async def download_file(self, *, file_id: str, max_bytes: int) -> bytes:
+        """Fetch a small file the user uploaded, into memory.
+
+        Deliberately narrow, and deliberately *not* symmetrical with the
+        delivery provider's upload: this exists to receive a cookie jar, which
+        is a few kilobytes of text. ``max_bytes`` is a required argument rather
+        than a default so no caller can forget it - the gateway must never be
+        the thing that reads an arbitrary-sized file into a 4 GB device.
+        """
+        ...
+
+    async def delete_message(self, *, chat_id: str, message_id: int) -> bool:
+        """Remove a message, returning whether it went.
+
+        Used to get an uploaded credential out of the conversation once it has
+        been stored. Best effort by nature: Telegram only lets a bot delete
+        messages within a limited window, so the caller must treat ``False`` as
+        "tell the user to delete it themselves", not as an error.
+        """
+        ...

@@ -18,6 +18,11 @@ from mediahub.application.access.use_cases.authorize_principal import (
     AuthorizeQuery,
 )
 from mediahub.application.common.errors import PermissionDeniedError
+from mediahub.application.credentials.use_cases.manage_cookies import (
+    DescribeCookies,
+    DiscardCookies,
+    InstallCookies,
+)
 from mediahub.application.download.dto import SourceSummary
 from mediahub.domain.access.enums import Action
 from mediahub.domain.access.policies import AllowListPolicy, AuthorizationPolicy
@@ -26,7 +31,12 @@ from mediahub.presentation.telegram import formatters
 from mediahub.presentation.telegram.handlers import GatewayServices, TelegramHandlers
 from mediahub.presentation.telegram.sessions import SessionStore
 from mediahub.presentation.telegram.updates import parse_update
-from tests.support.telegram_fakes import FakeMessenger, callback_update, message_update
+from tests.support.telegram_fakes import (
+    FakeCookieStore,
+    FakeMessenger,
+    callback_update,
+    message_update,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -78,6 +88,7 @@ def build(
         audit=audit,
         clock=FrozenClock(),
     )
+    cookie_store = FakeCookieStore()
     handlers = TelegramHandlers(
         GatewayServices(
             messenger=messenger,
@@ -87,6 +98,9 @@ def build(
             get_history=tripwire,  # type: ignore[arg-type]
             describe_capabilities=tripwire,  # type: ignore[arg-type]
             sessions=SessionStore(),
+            install_cookies=InstallCookies(store=cookie_store),
+            describe_cookies=DescribeCookies(store=cookie_store),
+            discard_cookies=DiscardCookies(store=cookie_store),
         )
     )
     return handlers, messenger, tripwire

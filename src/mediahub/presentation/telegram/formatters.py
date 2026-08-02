@@ -14,11 +14,13 @@ everything else.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
+    from mediahub.application.credentials.ports import CookieSummary
     from mediahub.application.delivery.ports import DeliveryProgress
     from mediahub.application.download.dto import (
         AcquisitionSummary,
@@ -31,9 +33,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 _KIB: Final[int] = 1024
 _BAR_WIDTH: Final[int] = 12
 _MAX_TITLE: Final[int] = 120
+_MAX_SITES_SHOWN: Final[int] = 8
+"""Enough to confirm the right export; short enough to stay one readable line."""
 
 ERROR_MESSAGES: Final[dict[str, str]] = {
     "invalid_url": "That does not look like a link I can fetch.",
+    "invalid_cookie_jar": (
+        "That is not a usable cookie file. Export it in Netscape format - most "
+        "cookie-exporter extensions offer that, and it is a text file with one "
+        "cookie per line."
+    ),
+    "cookie_store_unavailable": (
+        "I have nowhere to keep cookies. Set MEDIAHUB_DOWNLOAD__COOKIES_FILE and " "restart me."
+    ),
+    "upload_failed": "I could not read that file. Try sending it again.",
     "unsupported_url_scheme": "I can only fetch http and https links.",
     "blocked_address": "That address is not reachable from here.",
     "unsupported_provider": "I do not know how to handle that site.",
@@ -85,7 +98,11 @@ def render_help() -> str:
         "/start — say hello\n"
         "/help — this message\n"
         "/settings — what this instance can do\n"
-        "/history — what you have fetched recently"
+        "/history — what you have fetched recently\n"
+        "/cookies — show the stored sign-in cookies (owner only)\n\n"
+        "Some sites — X, TikTok, private Instagram — show nothing to a "
+        "logged-out visitor. Send me a Netscape-format cookies.txt and I will "
+        "use it. I delete the message afterwards."
     )
 
 
@@ -240,3 +257,95 @@ def _escape(text: str) -> str:
     for character in ("*", "_", "`", "[", "]"):
         text = text.replace(character, "")
     return text
+
+
+# -- Credentials -------------------------------------------------------------
+#
+# Everything below reports on a cookie jar without ever rendering one. Counts,
+# domains and dates answer the questions a person actually has - did the right
+# site get exported, and when will it stop working - and none of them is a
+# credential.
+
+
+def render_cookie_status(summary: CookieSummary | None) -> str:
+    """Describe the stored cookie jar."""
+    if summary is None:
+        return (
+            "No sign-in cookies stored.\n\n"
+            "Sites that hide media from logged-out visitors — X, TikTok, "
+            "private Instagram — will keep refusing. Send me a Netscape-format "
+            "cookies.txt to fix that."
+        )
+
+    lines = [
+        "🍪 *Sign-in cookies stored*",
+        f"Cookies: {summary.cookie_count}",
+        f"Sites: {_sites(summary)}",
+        f"Updated: {summary.installed_at:%Y-%m-%d %H:%M} UTC",
+        _expiry_line(summary),
+        "",
+        "Send a new file to replace it, or /cookies clear to remove it.",
+    ]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:
+    """Confirm a jar was stored, and say what it covers.
+
+    The site list is the useful part: exporting the wrong tab is the mistake
+    people actually make, and it otherwise shows up days later as "the bot
+    still cannot fetch X".
+    """
+    lines = [
+        "✅ *Sign-in cookies updated*",
+        f"Cookies: {summary.cookie_count}",
+        f"Sites: {_sites(summary)}",
+        _expiry_line(summary),
+        "",
+        (
+            "I deleted your upload."
+            if removed
+            else "⚠️ I could not delete your upload — please delete it yourself."
+        ),
+    ]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def render_cookies_discarded(*, removed: bool) -> str:
+    """Confirm the jar is gone."""
+    if removed:
+        return "Sign-in cookies removed. I will browse anonymously from now on."
+    return "There were no sign-in cookies stored."
+
+
+def render_cookie_too_large(declared: int, limit: int) -> str:
+    """Refuse an upload before any of it is transferred."""
+    return (
+        f"That file is {_bytes(declared)} and I accept up to {_bytes(limit)}. "
+        "A cookies.txt is normally a few kilobytes — check you exported "
+        "cookies rather than something else."
+    )
+
+
+def _sites(summary: CookieSummary) -> str:
+    """Render the domains a jar covers, bounded so it stays readable."""
+    shown = summary.domains[:_MAX_SITES_SHOWN]
+    if not shown:
+        return "unknown"
+    extra = len(summary.domains) - len(shown)
+    suffix = f" (+{extra} more)" if extra else ""
+    return ", ".join(shown) + suffix
+
+
+def _expiry_line(summary: CookieSummary) -> str | None:
+    """Render when the jar starts to lapse, or nothing if it never declares.
+
+    A jar does not fail loudly - the platform simply starts refusing again -
+    so this turns a future mystery into a date.
+    """
+    if summary.earliest_expiry is None:
+        return None
+    days = (summary.earliest_expiry - datetime.now(UTC)).days
+    if days < 0:
+        return "⚠️ The first cookie has already expired — send a fresh export."
+    return f"First expiry: in {days} day{'s' if days != 1 else ''}"

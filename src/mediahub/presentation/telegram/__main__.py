@@ -75,6 +75,9 @@ async def _run(settings: Settings) -> None:  # pragma: no cover - process wiring
             get_history=container.get_history_use_case(),
             describe_capabilities=container.describe_capabilities_use_case(router),
             sessions=SessionStore(ttl_seconds=telegram.session_ttl_seconds),
+            install_cookies=container.install_cookies_use_case(),
+            describe_cookies=container.describe_cookies_use_case(),
+            discard_cookies=container.discard_cookies_use_case(),
             progress_interval_seconds=telegram.progress_interval_seconds,
             history_limit=telegram.history_limit,
         )

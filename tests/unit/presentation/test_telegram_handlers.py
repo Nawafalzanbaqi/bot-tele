@@ -15,6 +15,11 @@ import pytest
 
 from mediahub.application.access.ports import Principal
 from mediahub.application.common.errors import PermissionDeniedError
+from mediahub.application.credentials.use_cases.manage_cookies import (
+    DescribeCookies,
+    DiscardCookies,
+    InstallCookies,
+)
 from mediahub.application.delivery.ports import DeliveryProgress, DeliveryStage
 from mediahub.application.download.dto import (
     AcquisitionSummary,
@@ -37,7 +42,13 @@ from mediahub.presentation.telegram.keyboards import (
 from mediahub.presentation.telegram.progress import ProgressPresenter
 from mediahub.presentation.telegram.sessions import SessionStore
 from mediahub.presentation.telegram.updates import parse_update
-from tests.support.telegram_fakes import FakeMessenger, callback_update, message_update
+from tests.support.telegram_fakes import (
+    FakeCookieStore,
+    FakeMessenger,
+    callback_update,
+    document_update,
+    message_update,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -52,6 +63,11 @@ if TYPE_CHECKING:
     from mediahub.application.download.ports import ProgressCallback
 
 pytestmark = pytest.mark.unit
+
+COOKIE_JAR = (
+    b"# Netscape HTTP Cookie File\n"
+    b"x.com\tTRUE\t/\tTRUE\t2000000000\tauth_token\tsecret-value-here\n"
+)
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 URL = "https://example.com/watch?v=abc"
@@ -214,6 +230,7 @@ def build(
     acquire: FakeAcquire | None = None,
     history: FakeHistory | None = None,
 ) -> tuple[TelegramHandlers, GatewayServices]:
+    cookie_store = FakeCookieStore()
     services = GatewayServices(
         messenger=messenger,
         authorize=authorize or FakeAuthorize(),  # type: ignore[arg-type]
@@ -222,6 +239,9 @@ def build(
         get_history=history or FakeHistory(),  # type: ignore[arg-type]
         describe_capabilities=FakeCapabilities(),  # type: ignore[arg-type]
         sessions=SessionStore(),
+        install_cookies=InstallCookies(store=cookie_store),
+        describe_cookies=DescribeCookies(store=cookie_store),
+        discard_cookies=DiscardCookies(store=cookie_store),
         progress_interval_seconds=0.01,
     )
     return TelegramHandlers(services), services
@@ -673,3 +693,92 @@ def test_callback_payloads_the_gateway_builds_are_ones_it_accepts(
     payload = CallbackPayload(action=action, token="abc123", choice="best")
 
     assert decode_callback(payload.encode()) == payload
+
+
+class TestCookieUpload:
+    """An owner keeps the bot signed in by sending it a file.
+
+    The alternative is an SSH session every few weeks, which is why this exists
+    at all: a jar that is inconvenient to refresh is a jar that expires and
+    stays expired.
+    """
+
+    async def test_an_uploaded_jar_is_installed(self) -> None:
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update())
+
+        assert "Sign-in cookies updated" in messenger.last_text
+        assert "x.com" in messenger.last_text
+
+    async def test_the_upload_is_deleted_from_the_conversation(self) -> None:
+        """A jar left in a chat is a live session in Telegram's history."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update(message_id=9))
+
+        assert messenger.deleted == [("4242", 9)]
+
+    async def test_when_telegram_refuses_the_deletion_the_user_is_told(self) -> None:
+        """Bots may only delete for a limited window; silence would be worse."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        messenger.delete_allowed = False
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update())
+
+        assert "delete it yourself" in messenger.last_text
+
+    async def test_a_file_that_is_not_a_jar_is_refused_with_a_usable_message(self) -> None:
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = b"a screenshot, probably"
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update())
+
+        assert "Netscape" in messenger.last_text
+
+    async def test_an_oversized_file_is_refused_before_it_is_fetched(self) -> None:
+        """The declared size is checked first, so a big upload costs no bytes."""
+        messenger = FakeMessenger()
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update(file_size=50 * 1024 * 1024))
+
+        assert "accept up to" in messenger.last_text
+        assert messenger.files == {}, "nothing should have been fetched"
+
+    async def test_the_jar_is_never_echoed_back(self) -> None:
+        """The reply describes the jar; it must never quote one."""
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+
+        await handle(handlers, document_update())
+
+        assert "secret-value-here" not in " ".join(messenger.texts())
+
+    async def test_cookies_command_reports_what_is_stored(self) -> None:
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+        await handle(handlers, document_update())
+
+        await handle(handlers, message_update("/cookies", update_id=20))
+
+        assert "Sign-in cookies stored" in messenger.last_text
+
+    async def test_cookies_clear_removes_them(self) -> None:
+        messenger = FakeMessenger()
+        messenger.files["FILE-1"] = COOKIE_JAR
+        handlers, _ = build(messenger)
+        await handle(handlers, document_update())
+
+        await handle(handlers, message_update("/cookies clear", update_id=21))
+
+        assert "removed" in messenger.last_text

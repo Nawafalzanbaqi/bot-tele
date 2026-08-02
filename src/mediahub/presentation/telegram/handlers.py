@@ -50,6 +50,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.access.use_cases.authorize_principal import (
         AuthorizePrincipal,
     )
+    from mediahub.application.credentials.use_cases.manage_cookies import (
+        DescribeCookies,
+        DiscardCookies,
+        InstallCookies,
+    )
     from mediahub.application.download.use_cases.acquire_media import AcquireMedia
     from mediahub.application.download.use_cases.describe_capabilities import (
         DescribeCapabilities,
@@ -76,6 +81,15 @@ target built here is one that provider accepts.
 
 URL_PREFIXES: Final[tuple[str, ...]] = ("http://", "https://")
 
+MAX_UPLOAD_BYTES: Final[int] = 2 * 1024 * 1024
+"""Ceiling on a file the gateway will read into memory.
+
+A cookie jar is a few kilobytes. This is generous enough that a real export
+never hits it and small enough that no upload can be a memory attack on a 4 GB
+device - which matters because, unlike a download, this arrives on the poll
+loop rather than in a worker with a lease and a budget.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class GatewayServices:
@@ -92,6 +106,9 @@ class GatewayServices:
     get_history: GetHistory
     describe_capabilities: DescribeCapabilities
     sessions: SessionStore
+    install_cookies: InstallCookies
+    describe_cookies: DescribeCookies
+    discard_cookies: DiscardCookies
     progress_interval_seconds: float = 3.0
     history_limit: int = 10
 
@@ -155,6 +172,9 @@ class TelegramHandlers:
         if intent.kind is IntentKind.COMMAND:
             await self._on_command(intent, principal)
             return
+        if intent.kind is IntentKind.DOCUMENT:
+            await self._on_document(intent, principal)
+            return
         await self._on_text(intent, principal)
 
     async def _on_command(self, intent: Intent, principal: Principal) -> None:
@@ -171,8 +191,26 @@ class TelegramHandlers:
                 GetHistoryQuery(principal=principal.identity, limit=self._services.history_limit)
             )
             await self._say(intent, formatters.render_history(entries))
+        elif intent.command == "cookies":
+            await self._on_cookies(intent, principal)
         else:
             await self._say(intent, formatters.render_help())
+
+    async def _on_cookies(self, intent: Intent, principal: Principal) -> None:
+        """Report or remove the stored cookie jar.
+
+        Owner-only by the same route as uploading one: ``/cookies`` maps to
+        :attr:`Action.MANAGE_CREDENTIALS`, so a member asking is refused before
+        reaching here rather than being told what is installed.
+        """
+        if (intent.argument or "").strip().lower() in {"clear", "remove", "delete"}:
+            removed = await self._services.discard_cookies.execute(
+                requested_by=str(principal.identity)
+            )
+            await self._say(intent, formatters.render_cookies_discarded(removed=removed))
+            return
+        summary = await self._services.describe_cookies.execute()
+        await self._say(intent, formatters.render_cookie_status(summary))
 
     async def _on_text(self, intent: Intent, principal: Principal) -> None:
         """Treat free text as a candidate source."""
@@ -197,6 +235,50 @@ class TelegramHandlers:
         session.prompt_message_id = message_id
         if not offerable:
             self._services.sessions.discard(session.token)
+
+    async def _on_document(self, intent: Intent, principal: Principal) -> None:
+        """Treat an attached file as a cookie jar, and nothing else.
+
+        Authorisation already happened: reaching here means the sender passed
+        :attr:`Action.MANAGE_CREDENTIALS`, which only an owner holds.
+
+        The uploaded message is deleted once the jar is stored. A cookie jar
+        left in a conversation is a live session sitting in Telegram's history
+        and in the notification of every device signed into that account, and
+        the person who uploaded it has no reason to keep it there.
+        """
+        if intent.file_id is None:  # pragma: no cover - parser guarantees one
+            return
+
+        declared = intent.file_size or 0
+        if declared > MAX_UPLOAD_BYTES:
+            await self._say(intent, formatters.render_cookie_too_large(declared, MAX_UPLOAD_BYTES))
+            return
+
+        try:
+            content = await self._services.messenger.download_file(
+                file_id=intent.file_id, max_bytes=MAX_UPLOAD_BYTES
+            )
+        except Exception:
+            logger.opt(exception=True).warning("Could not fetch an uploaded file")
+            await self._say(intent, formatters.render_error("upload_failed"))
+            return
+
+        summary = await self._services.install_cookies.execute(
+            content, requested_by=str(principal.identity)
+        )
+        removed = await self._forget_upload(intent)
+        await self._say(intent, formatters.render_cookies_installed(summary, removed=removed))
+
+    async def _forget_upload(self, intent: Intent) -> bool:
+        """Delete the message that carried a credential, if Telegram allows."""
+        if intent.message_id is None:  # pragma: no cover - messages carry one
+            return False
+        with contextlib.suppress(Exception):
+            return await self._services.messenger.delete_message(
+                chat_id=intent.chat_id, message_id=intent.message_id
+            )
+        return False  # pragma: no cover - suppress returns above
 
     async def _on_callback(self, intent: Intent, principal: Principal) -> None:
         """Handle a button press."""
@@ -360,6 +442,20 @@ class TelegramHandlers:
             await self._services.messenger.send_message(chat_id=intent.chat_id, text=text)
 
 
+COMMAND_ACTIONS: Final[dict[str, Action]] = {
+    "history": Action.VIEW_HISTORY,
+    # Replacing the jar changes who the device fetches as, and reading it back
+    # names the accounts it is signed in to. Both are owner-only.
+    "cookies": Action.MANAGE_CREDENTIALS,
+}
+"""Commands needing something other than the mildest action.
+
+A table rather than a chain of conditions, for the same reason the domain's
+permissions are one: adding a command means adding a line here, where the
+decision is visible, instead of an ``if`` buried in a handler.
+"""
+
+
 def _action_for(intent: Intent) -> Action:
     """Return the access action an intent represents.
 
@@ -369,11 +465,11 @@ def _action_for(intent: Intent) -> Action:
     """
     if intent.kind is IntentKind.CALLBACK:
         payload = decode_callback(intent.callback_data)
-        if payload is not None and payload.action is CallbackAction.ABORT:
-            return Action.CANCEL_ACQUISITION
-        return Action.SUBMIT_SOURCE
-    if intent.kind is IntentKind.COMMAND and intent.command == "history":
-        return Action.VIEW_HISTORY
+        aborting = payload is not None and payload.action is CallbackAction.ABORT
+        return Action.CANCEL_ACQUISITION if aborting else Action.SUBMIT_SOURCE
+    if intent.kind is IntentKind.DOCUMENT:
+        # The only file this gateway accepts is a cookie jar.
+        return Action.MANAGE_CREDENTIALS
     if intent.kind is IntentKind.COMMAND:
-        return Action.VIEW_SETTINGS
+        return COMMAND_ACTIONS.get(intent.command or "", Action.VIEW_SETTINGS)
     return Action.SUBMIT_SOURCE

@@ -30,3 +30,12 @@ class Action(StrEnum):
     CANCEL_ACQUISITION = "cancel_acquisition"
     VIEW_HISTORY = "view_history"
     VIEW_SETTINGS = "view_settings"
+    MANAGE_CREDENTIALS = "manage_credentials"
+    """Install or inspect the credentials the engine presents to sources.
+
+    Owner only, and it stays that way by construction: the owner's permission
+    set is *every* action, while the other roles are enumerated, so a new
+    action is owner-only until somebody deliberately widens it. That is the
+    right default here - a cookie jar is a live session, and whoever can
+    replace it can make the device fetch as somebody else.
+    """
