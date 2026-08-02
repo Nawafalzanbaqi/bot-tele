@@ -81,6 +81,7 @@ async def _run(settings: Settings) -> None:  # pragma: no cover - process wiring
             progress_interval_seconds=telegram.progress_interval_seconds,
             history_limit=telegram.history_limit,
             auto_best_quality=telegram.auto_best_quality,
+            max_concurrent=telegram.max_concurrent_acquisitions,
         )
     )
     gateway = TelegramGateway(client, handlers, poll_timeout_seconds=telegram.poll_timeout_seconds)

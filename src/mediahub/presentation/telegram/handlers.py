@@ -114,6 +114,8 @@ class GatewayServices:
     history_limit: int = 10
     auto_best_quality: bool = False
     """Start immediately at the best deliverable quality, with no menu."""
+    max_concurrent: int = 1
+    """Acquisitions allowed to run at once. Excess ones wait rather than fail."""
 
 
 class TelegramHandlers:
@@ -123,6 +125,11 @@ class TelegramHandlers:
         """Bind the handlers to their services."""
         self._services = services
         self._tasks: set[asyncio.Task[None]] = set()
+        # Admission control, not tuning. Nothing else bounds how many downloads
+        # run at once: five links pasted in a row started five downloads, five
+        # ffmpeg merges and five uploads on a four-core board that is also
+        # running other people's containers. Queued work still runs - it waits.
+        self._slots = asyncio.Semaphore(max(1, services.max_concurrent))
 
     @property
     def pending_tasks(self) -> int:
@@ -368,6 +375,17 @@ class TelegramHandlers:
         presenter: ProgressPresenter | None = None
         pump: asyncio.Task[None] | None = None
 
+        if self._slots.locked() and message_id is not None:
+            # Say so rather than appearing to have ignored the link. A silent
+            # wait is indistinguishable from a bot that dropped the request.
+            with contextlib.suppress(Exception):
+                await services.messenger.edit_message_text(
+                    chat_id=session.chat_id,
+                    message_id=message_id,
+                    text=formatters.render_queued(session.summary.title),
+                    reply_markup=None,
+                )
+
         if message_id is not None:
             presenter = ProgressPresenter(
                 services.messenger,
@@ -380,25 +398,26 @@ class TelegramHandlers:
             pump = asyncio.create_task(presenter.run())
 
         try:
-            summary = await services.acquire_media.execute(
-                AcquireMediaCommand(
-                    url=session.summary.url,
-                    quality_key=choice,
-                    target=DeliveryTarget(
-                        provider=DELIVERY_PROVIDER,
-                        address=TargetAddress(
+            async with self._slots:
+                summary = await services.acquire_media.execute(
+                    AcquireMediaCommand(
+                        url=session.summary.url,
+                        quality_key=choice,
+                        target=DeliveryTarget(
                             provider=DELIVERY_PROVIDER,
-                            opaque={CHAT_FIELD: session.chat_id},
+                            address=TargetAddress(
+                                provider=DELIVERY_PROVIDER,
+                                opaque={CHAT_FIELD: session.chat_id},
+                            ),
+                            label="this chat",
                         ),
-                        label="this chat",
+                        requested_by=principal.identity,
+                        caption=session.summary.title,
                     ),
-                    requested_by=principal.identity,
-                    caption=session.summary.title,
-                ),
-                on_progress=None if presenter is None else presenter.report,
-                on_delivery_progress=None if presenter is None else presenter.report_delivery,
-                cancellation=cancellation.token,
-            )
+                    on_progress=None if presenter is None else presenter.report,
+                    on_delivery_progress=(None if presenter is None else presenter.report_delivery),
+                    cancellation=cancellation.token,
+                )
         except (DomainError, ApplicationError) as exc:
             await self._finish(presenter, pump, session, formatters.render_error(exc.code))
         except Exception:

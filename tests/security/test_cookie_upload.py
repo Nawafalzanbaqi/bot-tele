@@ -203,3 +203,62 @@ def test_a_nonsense_expiry_does_not_reject_the_jar() -> None:
     parsed = parse("x.com\tTRUE\t/\tTRUE\t99999999999999\tauth_token\tvalue")
 
     assert parsed.cookie_count == 1
+
+
+class TestJarsMergeRatherThanReplace:
+    """Exports are taken one site at a time, so the file cannot be one site.
+
+    Replacing it wholesale made two sites mutually exclusive: uploading a
+    TikTok export silently signed the bot out of X, with a cheerful
+    confirmation and no way to notice until a download failed days later.
+    """
+
+    async def test_a_second_site_does_not_evict_the_first(self, tmp_path: Path) -> None:
+        store = FilesystemCookieStore(tmp_path / "cookies.txt")
+        await store.install(jar(row(domain="x.com")))
+
+        summary = await store.install(jar(row(domain="tiktok.com", name="sessionid")))
+
+        assert set(summary.domains) == {"tiktok.com", "x.com"}
+
+    async def test_re_exporting_a_site_replaces_only_that_site(self, tmp_path: Path) -> None:
+        """A fresh export is the browser's current truth for that host.
+
+        Merging cookie-by-cookie instead would resurrect ones the browser has
+        since dropped - which is how a dead session appears to still be there.
+        """
+        path = tmp_path / "cookies.txt"
+        store = FilesystemCookieStore(path)
+        await store.install(jar(row(domain="x.com", name="auth_token")))
+        await store.install(jar(row(domain="tiktok.com", name="sessionid")))
+
+        await store.install(jar(row(domain="x.com", name="auth_token")))
+
+        text = path.read_text(encoding="utf-8")
+        assert text.count("auth_token") == 1, "the stale X cookie must be gone"
+        assert "sessionid" in text, "TikTok must be untouched"
+
+    async def test_three_sites_accumulate(self, tmp_path: Path) -> None:
+        store = FilesystemCookieStore(tmp_path / "cookies.txt")
+        for host in ("x.com", "tiktok.com", "instagram.com"):
+            summary = await store.install(jar(row(domain=host)))
+
+        assert set(summary.domains) == {"instagram.com", "tiktok.com", "x.com"}
+
+    async def test_a_subdomain_export_replaces_its_own_host_only(self, tmp_path: Path) -> None:
+        store = FilesystemCookieStore(tmp_path / "cookies.txt")
+        await store.install(jar(row(domain=".x.com")))
+
+        summary = await store.install(jar(row(domain="vm.tiktok.com", name="sid")))
+
+        assert set(summary.domains) == {"vm.tiktok.com", "x.com"}
+
+    async def test_a_corrupt_stored_jar_does_not_block_replacing_it(self, tmp_path: Path) -> None:
+        """The one action that would fix it must not be the one it prevents."""
+        path = tmp_path / "cookies.txt"
+        path.write_bytes(b"\x00\x01 not a jar at all")
+        store = FilesystemCookieStore(path)
+
+        summary = await store.install(jar(row(domain="x.com")))
+
+        assert summary.domains == ("x.com",)

@@ -158,6 +158,16 @@ def render_source(summary: SourceSummary, *, automatic: bool = False) -> str:
     return "\n".join(lines)
 
 
+def render_queued(title: str) -> str:
+    """Say that a request is waiting for a free slot.
+
+    A silent wait is indistinguishable from a bot that dropped the message, and
+    the natural response to that is to send the link again - which is how a
+    queue of one becomes a queue of three.
+    """
+    return f"*{_escape(_clip(title, _MAX_TITLE))}*\nWaiting for a free slot…"
+
+
 def render_progress(progress: DownloadProgress, *, title: str) -> str:
     """Render a progress line for an in-flight download."""
     header = f"*{_escape(_clip(title, _MAX_TITLE))}*"

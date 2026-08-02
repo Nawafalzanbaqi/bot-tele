@@ -169,6 +169,13 @@ services:
       TELEGRAM_LOCAL: "1"
     volumes:
       - botapi:/var/lib/telegram-bot-api
+      # The workspace, read-only and **at the same path the gateway sees**.
+      #
+      # In local mode a file is delivered by handing this server its path
+      # instead of its bytes, which is what keeps a 2 GB upload from being 2 GB
+      # of resident memory in the gateway. The paths must line up exactly: an
+      # absolute path is meaningless to a process that mounted it elsewhere.
+      - data:/data:ro
     networks:
       - mediahub
     deploy:

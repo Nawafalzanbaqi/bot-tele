@@ -229,6 +229,8 @@ def build(
     probe: FakeProbe | None = None,
     acquire: FakeAcquire | None = None,
     history: FakeHistory | None = None,
+    auto: bool = False,
+    max_concurrent: int = 1,
 ) -> tuple[TelegramHandlers, GatewayServices]:
     cookie_store = FakeCookieStore()
     services = GatewayServices(
@@ -243,6 +245,8 @@ def build(
         describe_cookies=DescribeCookies(store=cookie_store),
         discard_cookies=DiscardCookies(store=cookie_store),
         progress_interval_seconds=0.01,
+        auto_best_quality=auto,
+        max_concurrent=max_concurrent,
     )
     return TelegramHandlers(services), services
 
@@ -871,3 +875,45 @@ class TestFailureExplainsItself:
         await handle(handlers, document_update(message_id=9))
 
         assert messenger.sent[-1].reply_to_message_id == 9
+
+
+class TestConcurrencyIsBounded:
+    """Five links pasted in a row must not start five downloads.
+
+    Nothing else bounds this: each acquisition is its own task, and each one
+    holds a download, an ffmpeg merge and an upload. On a four-core board that
+    is also running other people's containers, unbounded means the other
+    containers suffer for a queue nobody asked to be parallel.
+    """
+
+    async def test_only_one_acquisition_runs_at_a_time(self) -> None:
+        messenger = FakeMessenger()
+        acquire = FakeAcquire()
+        acquire.hold = True
+        handlers, _ = build(messenger, acquire=acquire, auto=True)
+
+        for index in range(3):
+            await handle(handlers, message_update(URL, update_id=100 + index))
+        await asyncio.sleep(0.05)
+
+        assert len(acquire.commands) == 1, "the second and third must wait"
+
+        acquire.gate.set()
+        await asyncio.sleep(0.05)
+        assert len(acquire.commands) == 3, "waiting work must still run"
+
+    async def test_a_waiting_request_says_so(self) -> None:
+        """Silence is indistinguishable from having dropped the message."""
+        messenger = FakeMessenger()
+        acquire = FakeAcquire()
+        acquire.hold = True
+        handlers, _ = build(messenger, acquire=acquire, auto=True)
+
+        await handle(handlers, message_update(URL, update_id=200))
+        await handle(handlers, message_update(URL, update_id=201))
+        await asyncio.sleep(0.05)
+
+        assert any("Waiting for a free slot" in text for text in messenger.texts())
+
+        acquire.gate.set()
+        await asyncio.sleep(0.05)

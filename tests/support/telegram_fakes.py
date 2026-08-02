@@ -160,8 +160,14 @@ class FakeUploader:
         width: int | None = None,
         height: int | None = None,
         thumbnail: Path | None = None,
+        local_path: Path | None = None,
     ) -> UploadedMedia:
-        """Drain the stream, record the upload, and answer as Telegram would."""
+        """Drain the stream, record the upload, and answer as Telegram would.
+
+        A local path is recorded but the stream is still drained: the fake
+        stands in for a server that may or may not take the shortcut, and
+        the provider must produce the same receipt either way.
+        """
         if self.error is not None:
             raise self.error
 
@@ -181,6 +187,7 @@ class FakeUploader:
                 "width": width,
                 "height": height,
                 "thumbnail": thumbnail,
+                "local_path": local_path,
                 "size": size,
             }
         )

@@ -424,6 +424,9 @@ class TelegramSettings(_ConfigSection):
         owner_ids: Telegram user ids with full access.
         member_ids: Telegram user ids that may fetch and read their history.
         readonly_ids: Telegram user ids that may only look.
+        max_concurrent_acquisitions: How many downloads may run at once.
+            One is right for a bandwidth-bound device that shares its CPU
+            with other things; excess requests wait rather than failing.
         auto_best_quality: Start fetching immediately at the best quality
             the destination will accept, instead of posting a keyboard and
             waiting. The menu is a tap that delays every download to answer
@@ -445,6 +448,7 @@ class TelegramSettings(_ConfigSection):
     member_ids: list[str] = Field(default_factory=list)
     readonly_ids: list[str] = Field(default_factory=list)
     auto_best_quality: bool = True
+    max_concurrent_acquisitions: int = Field(default=1, ge=1, le=8)
     poll_timeout_seconds: int = Field(default=30, ge=1, le=120)
     progress_interval_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
     history_limit: int = Field(default=10, ge=1, le=50)

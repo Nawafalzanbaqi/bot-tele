@@ -12,20 +12,28 @@ produces a library that silently breaks:
 * the stable identifier survives a token change but cannot be used to fetch, so
   it is kept alongside as the identity of the content.
 
-**Known limitation, stated rather than hidden.** The client library reads a file
-into memory before uploading it, so this provider reports
-``supports_streaming=False``. Progress and the checksum are still real - the
-artifact is read through a measuring wrapper - but a multi-gigabyte upload costs
-that much RAM. That is why ``supports_large_files`` is tied to whether a
-self-hosted Bot API server is configured: without one the ceiling is 50 MB and
-the question does not arise.
+**How the bytes travel depends on which server is in use**, and the
+difference is the whole reason a 2 GB ceiling is usable.
+
+Against the public API the client library reads the file into memory before
+uploading it. At the 50 MB public ceiling that is merely wasteful, and progress
+and the checksum come free from the measuring wrapper the artifact is read
+through.
+
+Against a **self-hosted** server the file is handed over by path and the server
+reads it itself: no buffer, no socket, and no 2 GB of resident memory on a
+board that has 4 GB in total. The checksum is then computed by streaming the
+file in chunks, so it stays as real and stays bounded.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import time
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Final
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final
 
 from loguru import logger
 
@@ -42,12 +50,11 @@ from mediahub.application.delivery.ports import (
     RemoteArtifactRef,
     RemoteMessageRef,
 )
+from mediahub.domain.common.fingerprint import Fingerprint, HashAlgorithm
 from mediahub.infrastructure.delivery.shared.measured_reader import MeasuredReader
 from mediahub.infrastructure.delivery.telegram.errors import PROVIDER, classify
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from pathlib import Path
-
     from mediahub.application.delivery.ports import (
         DeliveryProgressCallback,
         DeliveryRequest,
@@ -118,9 +125,10 @@ class TelegramDeliveryProvider:
         return DeliveryCapabilities(
             provider=PROVIDER,
             maximum_file_size=self._max_bytes,
-            # False, and honestly so: the client library buffers the whole file
-            # before uploading it. See the module docstring.
-            supports_streaming=False,
+            # True only where the file is handed over by path: against the
+            # public API the library buffers the whole upload, and claiming
+            # otherwise would let a caller offer something this cannot keep.
+            supports_streaming=self._local_api_server,
             supports_large_files=self._local_api_server,
             # Telegram keeps the bytes and hands back a reusable reference,
             # which is what makes it a custodian - and therefore what makes
@@ -161,6 +169,10 @@ class TelegramDeliveryProvider:
         thumbnail = self._poster(request, workspace)
 
         started = time.monotonic()
+
+        if self._local_api_server:
+            return await self._deliver_by_path(request, chat, path, thumbnail, size, on_progress)
+
         with path.open("rb") as handle:
             reader = MeasuredReader(
                 handle,
@@ -191,6 +203,50 @@ class TelegramDeliveryProvider:
             container_id=uploaded.chat_id,
             message_id=uploaded.message_id,
             size_bytes=uploaded.bytes_sent or measured,
+            started=started,
+            checksum=checksum,
+            reused=False,
+        )
+
+    async def _deliver_by_path(
+        self,
+        request: DeliveryRequest,
+        chat: str,
+        path: Path,
+        thumbnail: Path | None,
+        size: int,
+        on_progress: DeliveryProgressCallback | None,
+    ) -> DeliveryReceipt:
+        """Hand the file's path to a self-hosted server instead of its bytes.
+
+        The client library reads a whole upload into memory. At the 50 MB
+        public ceiling that is merely wasteful; at the 2 GB ceiling a
+        self-hosted server allows, it is an out-of-memory kill on a small
+        board - so the ceiling would exist on paper and not in practice.
+
+        The server reads the file directly, which also means the bytes are
+        never copied over a socket to a process on the same machine.
+
+        The checksum is still real. It is computed by streaming the file in
+        chunks rather than by measuring an upload that no longer happens, which
+        costs one sequential read and never more than a buffer of memory.
+        """
+        started = time.monotonic()
+        _report(on_progress, DeliveryStage.UPLOADING, 0, size)
+        checksum = await asyncio.to_thread(_digest_of, path)
+
+        uploaded = await self._upload(request, chat, path, thumbnail, local_path=path)
+
+        _report(on_progress, DeliveryStage.COMPLETED, size, size)
+        logger.bind(provider=PROVIDER, kind=request.kind.value, bytes=size, streamed=True).info(
+            "Delivered artifact by path"
+        )
+        return self._receipt(
+            remote_id=uploaded.file_id,
+            remote_unique_id=uploaded.file_unique_id,
+            container_id=uploaded.chat_id,
+            message_id=uploaded.message_id,
+            size_bytes=uploaded.bytes_sent or size,
             started=started,
             checksum=checksum,
             reused=False,
@@ -238,14 +294,17 @@ class TelegramDeliveryProvider:
         self,
         request: DeliveryRequest,
         chat: str,
-        reader: MeasuredReader,
+        reader: Any,
         thumbnail: Path | None,
+        *,
+        local_path: Path | None = None,
     ) -> UploadedMedia:
         """Perform the upload, translating any failure on the way out."""
         try:
             return await self._uploader.send_media(
                 chat_id=chat,
                 content=reader,
+                local_path=local_path,
                 kind=request.kind.value,
                 caption=_truncate(request.caption),
                 filename=request.filename or request.artifact.name,
@@ -322,6 +381,20 @@ class TelegramDeliveryProvider:
             checksum=checksum,
             reused_reference=reused,
         )
+
+
+def _digest_of(path: Path, *, chunk: int = 1024 * 1024) -> Fingerprint:
+    """Return a file's checksum, read in chunks.
+
+    Sequential and bounded: the point of delivering by path is that a large
+    file never sits in memory, and a checksum that slurped the file would
+    reintroduce exactly what was avoided.
+    """
+    digest = hashlib.new(HashAlgorithm.SHA256.value)
+    with path.open("rb") as handle:
+        while block := handle.read(chunk):
+            digest.update(block)
+    return Fingerprint(algorithm=HashAlgorithm.SHA256, digest=digest.hexdigest())
 
 
 def _report(

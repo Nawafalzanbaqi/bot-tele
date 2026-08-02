@@ -34,7 +34,7 @@ from mediahub.application.credentials.errors import (
     InvalidCookieJarError,
 )
 from mediahub.application.credentials.ports import CookieSummary
-from mediahub.infrastructure.credentials.cookie_jar import decode, parse
+from mediahub.infrastructure.credentials.cookie_jar import decode, merge, parse
 
 _FILE_MODE = stat.S_IRUSR | stat.S_IWUSR
 """0600. The jar is a live session; nobody else on the device needs it."""
@@ -81,9 +81,16 @@ class FilesystemCookieStore:
             )
             raise InvalidCookieJarError(message)
 
+        # Merge rather than replace. An export is taken one site at a time, so
+        # overwriting the file makes two sites mutually exclusive: uploading
+        # cookies for TikTok would silently sign the bot out of X.
+        merged = merge(self._current_text(path), text)
+        payload = merged.encode("utf-8")
+        parsed = parse(merged)
+
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._write_atomically(path, content)
+            self._write_atomically(path, payload)
         except OSError as exc:
             message = f"the cookie jar location is not writable: {exc.strerror}"
             raise CookieStoreUnavailableError(message) from exc
@@ -97,7 +104,7 @@ class FilesystemCookieStore:
             domains=parsed.domains,
             earliest_expiry=parsed.earliest_expiry,
             installed_at=datetime.now(UTC),
-            size_bytes=len(content),
+            size_bytes=len(payload),
         )
 
     async def describe(self) -> CookieSummary | None:
@@ -125,6 +132,21 @@ class FilesystemCookieStore:
         self._path.unlink(missing_ok=True)
         logger.info("Discarded the stored cookie jar")
         return True
+
+    @staticmethod
+    def _current_text(path: Path) -> str:
+        """Return what is already stored, or empty for a first install.
+
+        Unreadable is treated as empty rather than fatal: a corrupt jar must
+        not block replacing it, which is the one action that would fix it.
+        """
+        if not path.is_file():
+            return ""
+        try:
+            return decode(path.read_bytes())
+        except (OSError, ValueError):
+            logger.warning("The stored cookie jar could not be read; replacing it wholesale")
+            return ""
 
     def _require_path(self) -> Path:
         """Return the configured path, or explain that there is not one."""

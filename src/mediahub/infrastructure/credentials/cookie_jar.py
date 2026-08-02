@@ -102,6 +102,50 @@ def parse(text: str) -> ParsedJar:
     )
 
 
+def merge(existing: str, incoming: str) -> str:
+    """Return ``existing`` with ``incoming``'s domains replaced wholesale.
+
+    The unit of replacement is the **domain**, not the file. An export taken
+    while X is open should replace the X cookies and leave TikTok's alone -
+    replacing the whole file instead means the two sites are mutually
+    exclusive, which is exactly the trap this avoids: uploading the second
+    export silently signs the bot out of the first.
+
+    Within a domain, replacement rather than a per-cookie merge, because a
+    fresh export *is* the browser's current truth for that site: keeping an old
+    cookie the browser has since dropped would resurrect a dead session.
+    """
+    replaced = set(parse(incoming).domains)
+    kept = [
+        line
+        for line in existing.splitlines()
+        if not _is_cookie_line(line) or _domain_of(line) not in replaced
+    ]
+    added = [line for line in incoming.splitlines() if _is_cookie_line(line)]
+    body = [line for line in kept if line.strip() and not line.startswith("#")] + added
+    return "\n".join([HEADER, *body]) + "\n"
+
+
+HEADER: Final[str] = "# Netscape HTTP Cookie File"
+
+
+def _is_cookie_line(line: str) -> bool:
+    """Return whether a line carries a cookie rather than a comment."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("#") and not stripped.startswith(HTTP_ONLY_PREFIX):
+        return False
+    payload = stripped.removeprefix(HTTP_ONLY_PREFIX)
+    return len(payload.split("\t")) >= FIELD_COUNT
+
+
+def _domain_of(line: str) -> str:
+    """Return the host a cookie line belongs to, normalised."""
+    payload = line.strip().removeprefix(HTTP_ONLY_PREFIX)
+    return payload.split("\t")[0].strip().lstrip(".").lower()
+
+
 def _expiry(field: str) -> datetime | None:
     """Return a cookie's expiry, or ``None`` for a session cookie.
 

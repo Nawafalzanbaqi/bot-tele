@@ -123,8 +123,14 @@ class TelegramUploader(Protocol):
         width: int | None = None,
         height: int | None = None,
         thumbnail: Path | None = None,
+        local_path: Path | None = None,
     ) -> UploadedMedia:
-        """Upload media and return what Telegram said about it."""
+        """Upload media and return what Telegram said about it.
+
+        ``local_path`` is an optimisation the provider offers and the client
+        may ignore: where a self-hosted server can read the file itself, the
+        bytes never pass through this process at all.
+        """
         ...
 
     async def send_by_reference(
@@ -150,7 +156,7 @@ class PythonTelegramBotClient:
     and error classification all live with the components that own them.
     """
 
-    __slots__ = ("_bot",)
+    __slots__ = ("_bot", "_local_mode")
 
     def __init__(self, token: str, *, api_base_url: str | None = None) -> None:
         """Build a bot client.
@@ -181,6 +187,7 @@ class PythonTelegramBotClient:
             # download. `local_mode` is the library's own switch for the case
             # and leaves the path alone, which is what makes it readable here.
             kwargs["local_mode"] = True
+        self._local_mode = bool(api_base_url)
         self._bot: Any = _Bot(**kwargs)
 
     async def start(self) -> None:  # pragma: no cover - requires the network
@@ -332,13 +339,25 @@ class PythonTelegramBotClient:
         width: int | None = None,
         height: int | None = None,
         thumbnail: Path | None = None,
+        local_path: Path | None = None,
     ) -> UploadedMedia:  # pragma: no cover - requires the network
-        """Upload a stream, presenting it according to ``kind``."""
+        """Upload a stream, presenting it according to ``kind``.
+
+        When ``local_path`` is given **and** a self-hosted server is in use, the
+        path is handed over instead of the bytes and the server reads the file
+        itself. That is the difference between a 2 GB ceiling that exists and
+        one that only appears to: the client library buffers a whole upload in
+        memory, so without this a large file is an out-of-memory kill on a 4 GB
+        board rather than a delivery.
+        """
         common: dict[str, Any] = {
             "chat_id": chat_id,
             "caption": caption,
             "filename": filename,
         }
+        payload: Any = content
+        if local_path is not None and self._local_mode:
+            payload = local_path
         # The poster image is opened inside a context manager rather than inline
         # in the call. An inline ``open`` leaks one descriptor per delivery, and
         # a process that delivers for months hits the descriptor ceiling and
@@ -346,7 +365,7 @@ class PythonTelegramBotClient:
         with _opened(thumbnail) as poster:
             if kind == "video":
                 message = await self._bot.send_video(
-                    video=content,
+                    video=payload,
                     duration=duration_seconds,
                     width=width,
                     height=height,
@@ -357,14 +376,14 @@ class PythonTelegramBotClient:
                 media = message.video
             elif kind == "audio":
                 message = await self._bot.send_audio(
-                    audio=content, duration=duration_seconds, **common
+                    audio=payload, duration=duration_seconds, **common
                 )
                 media = message.audio
             elif kind == "photo":
-                message = await self._bot.send_photo(photo=content, **common)
+                message = await self._bot.send_photo(photo=payload, **common)
                 media = message.photo[-1] if message.photo else None
             else:
-                message = await self._bot.send_document(document=content, **common)
+                message = await self._bot.send_document(document=payload, **common)
                 media = message.document
 
         return _uploaded(message, media, bytes_sent=_stream_size(content))
