@@ -171,7 +171,16 @@ class PythonTelegramBotClient:
         request = _HTTPXRequest(connection_pool_size=8, read_timeout=60, write_timeout=600)
         kwargs: dict[str, Any] = {"token": token, "request": request}
         if api_base_url:
-            kwargs["base_url"] = api_base_url.rstrip("/") + "/bot"
+            base = api_base_url.rstrip("/")
+            kwargs["base_url"] = f"{base}/bot"
+            kwargs["base_file_url"] = f"{base}/file/bot"
+            # Without this the library treats a self-hosted server exactly like
+            # the public one: it prepends the public file URL to the *absolute
+            # local path* the server returns, producing
+            # `api.telegram.org/file/bot<token>//var/lib/...` and a 404 on every
+            # download. `local_mode` is the library's own switch for the case
+            # and leaves the path alone, which is what makes it readable here.
+            kwargs["local_mode"] = True
         self._bot: Any = _Bot(**kwargs)
 
     async def start(self) -> None:  # pragma: no cover - requires the network
