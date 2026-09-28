@@ -440,7 +440,7 @@ class TelegramHandlers:
                                 provider=DELIVERY_PROVIDER,
                                 opaque={CHAT_FIELD: session.chat_id},
                             ),
-                            label="this chat",
+                            label="هذه المحادثة",
                         ),
                         requested_by=principal.identity,
                         caption=session.summary.title,

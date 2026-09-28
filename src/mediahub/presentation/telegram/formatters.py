@@ -61,7 +61,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
         "فيه سطر لكل كوكي."
     ),
     "cookie_store_unavailable": (
-        "لا يوجد مكان لحفظ الكوكيز.\n\n" "اضبط MEDIAHUB_DOWNLOAD__COOKIES_FILE ثم أعد تشغيلي."
+        "هذه النسخة غير مضبوطة لحفظ الكوكيز.\n\n" "أبلغ من يشغّل البوت ليضبط مكان الحفظ."
     ),
     "upload_failed": "تعذّرت قراءة الملف. أرسله مرة أخرى.",
     "unsupported_url_scheme": "أستطيع جلب روابط http و https فقط.",
@@ -91,8 +91,8 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     ),
     "connection_blocked": (
         "🚧 الاتصال بالموقع يُقطع قبل أن يرسل شيئًا.\n\n"
-        "هذا حجب في الشبكة بين الجهاز والموقع، وليس عطلًا في الموقع.\n\n"
-        "💡 الحل: فعّل نفق الخروج — اضبط MEDIAHUB_DOWNLOAD__PROXY."
+        "هذا حجب في الشبكة بين الجهاز والموقع، وليس عطلًا في الموقع. "
+        "جرّبت المسار البديل أيضًا ولم ينجح — جرّب لاحقًا أو أبلغ من يشغّل البوت."
     ),
     "rate_limited": (
         "⏳ الموقع يطلب منّي التمهّل.\n\n" "انتظر دقائق قليلة ثم أرسل الرابط مرة أخرى."
@@ -107,8 +107,18 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     ),
     "download_timeout": "استغرق وقتًا أطول ممّا يجب فأوقفته.",
     "download_cancelled": "تمّ الإلغاء.",
-    "size_limit_exceeded": "الملف أكبر ممّا أستطيع تحميله.",
-    "artifact_too_large": "الملف أكبر ممّا يقبله تلجرام هنا.",
+    "size_limit_exceeded": "الملف أكبر ممّا أستطيع تحميله.\n\nالحدّ الحالي في /settings.",
+    "artifact_too_large": "الملف أكبر ممّا يقبله تلجرام هنا.\n\nالحدّ الحالي في /settings.",
+    # Workspace faults. All of them are about this device, not about the link,
+    # and none used to have a sentence of their own: they fell through to the
+    # generic error, which reads as "try again" when trying again cannot help.
+    "workspace_quota_exceeded": (
+        "لا توجد مساحة كافية لهذا الملف الآن.\n\n" "انتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
+    ),
+    "lease_closed": "توقّف هذا التحميل قبل أن يكتمل. أرسل الرابط مرة أخرى.",
+    "workspace_inconsistent": "حدث خلل في مساحة العمل على الجهاز. أعد المحاولة، وإن تكرّر فأبلِغني.",
+    "integrity_check_failed": "الملف الذي وصل لا يطابق ما أُعلن عنه؛ لم أُرسله. أعد المحاولة.",
+    "path_escapes_workspace": "رُفض هذا الملف لأسباب أمنية.",
     "delivery_rate_limited": "تلجرام يطلب التمهّل. جرّب بعد قليل.",
     "delivery_quota_exceeded": "لا يوجد متّسع لدى الوجهة الآن.",
     "provider_unavailable": "الوجهة غير متاحة. جرّب بعد دقائق.",

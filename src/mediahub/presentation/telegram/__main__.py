@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 def main() -> None:
     """Start the gateway, or refuse to start with a reason."""
+    # The workspace creates its own files 0600, but the download engines create
+    # theirs with the process umask - 0644 by default, so every downloaded
+    # file was world-readable inside the container until deleted. 0o027 keeps
+    # group read, which the Bot API server's gid-101 hand-off needs
+    # (docker-compose.pi.yml, group_add), and drops the rest.
+    os.umask(0o027)
     settings = get_settings()
     configure_logging(settings)
 
