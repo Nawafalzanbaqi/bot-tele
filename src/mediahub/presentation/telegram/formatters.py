@@ -168,7 +168,7 @@ def render_source(summary: SourceSummary, *, automatic: bool = False) -> str:
             statement, because telling someone to choose when no keyboard is
             coming is the worst of both.
     """
-    lines = [f"*{_escape(_clip(summary.title, _MAX_TITLE))}*"]
+    lines = [_clip(summary.title, _MAX_TITLE)]
 
     facts: list[str] = [summary.provider]
     if summary.duration_seconds is not None:
@@ -198,12 +198,12 @@ def render_queued(title: str) -> str:
     the natural response to that is to send the link again - which is how a
     queue of one becomes a queue of three.
     """
-    return f"*{_escape(_clip(title, _MAX_TITLE))}*\n⏸ في الانتظار حتى يفرغ مسار…"
+    return f"{_clip(title, _MAX_TITLE)}\n⏸ في الانتظار حتى يفرغ مسار…"
 
 
 def render_progress(progress: DownloadProgress, *, title: str) -> str:
     """Render a progress line for an in-flight download."""
-    header = f"*{_escape(_clip(title, _MAX_TITLE))}*"
+    header = _clip(title, _MAX_TITLE)
     percent = progress.percentage
 
     if percent is None:
@@ -230,7 +230,7 @@ def render_delivery_progress(progress: DeliveryProgress, *, title: str) -> str:
     of the operation and a user watching a slow upload deserves to be told that
     is what is happening.
     """
-    header = f"*{_escape(_clip(title, _MAX_TITLE))}*"
+    header = _clip(title, _MAX_TITLE)
     percent = progress.percentage
 
     if percent is None:
@@ -247,7 +247,7 @@ def render_delivery_progress(progress: DeliveryProgress, *, title: str) -> str:
 def render_delivered(summary: AcquisitionSummary) -> str:
     """Render the confirmation shown once the file has been sent."""
     return (
-        f"*{_escape(_clip(summary.title, _MAX_TITLE))}*\n"
+        f"{_clip(summary.title, _MAX_TITLE)}\n"
         f"✅ تم الإرسال · {summary.quality_label} · "
         f"{_bytes(summary.bytes_delivered)} · {_duration(summary.elapsed_seconds)}\n"
         "🗑 حُذفت النسخة من الجهاز."
@@ -259,9 +259,9 @@ def render_history(entries: Sequence[HistoryEntrySummary]) -> str:
     if not entries:
         return "لم تحمّل شيئًا بعد."
 
-    lines = ["*آخر ما حمّلت*"]
+    lines = ["آخر ما حمّلت:"]
     lines.extend(
-        f"• {_escape(_clip(entry.title, 60))} — {entry.quality_label} · "
+        f"• {_clip(entry.title, 60)} — {entry.quality_label} · "
         f"{_bytes(entry.bytes_delivered)} · {entry.delivered_at:%Y-%m-%d %H:%M} UTC"
         for entry in entries
     )
@@ -272,7 +272,7 @@ def render_settings(capabilities: CapabilitiesSummary) -> str:
     """Render what this instance can currently do."""
     yes, no = "نعم", "لا"
     return (
-        "*هذه النسخة*\n"
+        "هذه النسخة:\n"
         f"المحرّك · {capabilities.engine} {capabilities.engine_version}\n"
         f"يرسل إلى · {capabilities.delivery_provider}\n"
         f"أكبر ملف · {_bytes(capabilities.effective_max_bytes)}\n"
@@ -322,15 +322,10 @@ def _clip(text: str, limit: int) -> str:
     return collapsed[: limit - 1] + "…"
 
 
-def _escape(text: str) -> str:
-    """Neutralise the characters that would break simple markdown.
-
-    Titles are attacker-controlled: a well-placed asterisk or underscore
-    otherwise mangles every message that follows it.
-    """
-    for character in ("*", "_", "`", "[", "]"):
-        text = text.replace(character, "")
-    return text
+# Messages are sent as plain text - the client never sets a parse mode - so
+# titles need no markdown escaping and are shown exactly as the source named
+# them. The previous ``*title*`` wrapping was rendered literally, asterisks and
+# all, on every message.
 
 
 # -- Credentials -------------------------------------------------------------

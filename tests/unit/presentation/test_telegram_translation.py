@@ -264,11 +264,29 @@ class TestFormatters:
 
         assert "قائمة" in text
 
-    def test_titles_cannot_break_the_message(self) -> None:
-        text = formatters.render_source(summary(title="*bold* _under_ `code` [link]"))
+    def test_titles_are_shown_verbatim_as_plain_text(self) -> None:
+        """No parse mode is ever set, so nothing needs escaping - or wrapping.
 
-        assert "*bold*" not in text
-        assert "`" not in text
+        The old ``*title*`` header was rendered by Telegram exactly as typed,
+        asterisks included, on every message the bot ever sent.
+        """
+        title = "*bold* _under_ `code` [link]"
+        text = formatters.render_source(summary(title=title))
+
+        assert text.startswith(title)
+        assert not text.startswith("*" + title)
+
+    def test_no_message_wraps_its_header_in_asterisks(self) -> None:
+        texts = [
+            formatters.render_source(summary(title="Plain")),
+            formatters.render_queued("Plain"),
+            formatters.render_progress(
+                DownloadProgress(stage=DownloadStage.DOWNLOADING, downloaded_bytes=1), title="Plain"
+            ),
+            formatters.render_history(()),
+        ]
+
+        assert all("*Plain*" not in text for text in texts)
 
     def test_long_titles_are_clipped(self) -> None:
         text = formatters.render_source(summary(title="x" * 500))
