@@ -58,6 +58,7 @@ from mediahub.domain.sources.policies import UrlPolicy
 from mediahub.infrastructure.download.shared.retry import RetrySchedule, retry_async
 from mediahub.infrastructure.download.ytdlp.errors import classify
 from mediahub.infrastructure.download.ytdlp.format_selection import build_format_expression
+from mediahub.infrastructure.download.ytdlp.inspection import verify_complete
 from mediahub.infrastructure.download.ytdlp.mapping import to_metadata, to_selected_format
 from mediahub.infrastructure.download.ytdlp.options import (
     build_download_options,
@@ -80,6 +81,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     )
     from mediahub.application.workspace.ports import ArtifactRef, WorkspaceScope
     from mediahub.domain.sources.value_objects import ValidatedUrl
+    from mediahub.infrastructure.download.ytdlp.inspection import StreamInspector
     from mediahub.infrastructure.security.address_guard import DnsAddressGuard
     from mediahub.shared.config.settings import DownloadSettings
 
@@ -395,7 +397,14 @@ def _impersonate_target(name: str) -> Any:  # pragma: no cover - depends on the 
 class YtDlpDownloader:
     """Downloads media with yt-dlp, behind the engine-neutral port."""
 
-    __slots__ = ("_address_guard", "_factory", "_proxy_policy", "_settings", "_url_policy")
+    __slots__ = (
+        "_address_guard",
+        "_factory",
+        "_inspector",
+        "_proxy_policy",
+        "_settings",
+        "_url_policy",
+    )
 
     def __init__(
         self,
@@ -405,6 +414,7 @@ class YtDlpDownloader:
         address_guard: DnsAddressGuard | None = None,
         youtube_dl_factory: YoutubeDLFactory | None = None,
         proxy_policy: ProxyPolicy | None = None,
+        inspector: StreamInspector | None = None,
     ) -> None:
         """Wire the engine to its configuration and its guards.
 
@@ -418,11 +428,16 @@ class YtDlpDownloader:
                 which is what keeps the unit suite free of network access.
             proxy_policy: Decides which hosts are fetched through the egress.
                 Built from ``settings`` when omitted.
+            inspector: Looks inside the finished file and refuses one that is
+                not the media that was asked for. Omitting it skips the check,
+                which is right for a device without ``ffprobe`` and for tests
+                whose "downloads" are a few zero bytes.
         """
         self._settings = settings
         self._url_policy = url_policy or UrlPolicy()
         self._address_guard = address_guard
         self._factory = youtube_dl_factory or default_youtube_dl_factory
+        self._inspector = inspector
         self._proxy_policy = proxy_policy or ProxyPolicy(
             settings.proxy,
             settings.proxy_hosts,
@@ -549,6 +564,7 @@ class YtDlpDownloader:
                 max_bytes=max_bytes,
                 via_proxy=via_proxy,
             )
+            await self._inspect(result, workspace, url=validated.value)
         except BaseException:
             self._discard_new_files(workspace, existing)
             raise
@@ -947,6 +963,38 @@ class YtDlpDownloader:
             raise MetadataUnavailableError(message)
         if max_bytes is not None and total_bytes > max_bytes:
             raise SizeLimitExceededError(max_bytes, total_bytes)
+
+    async def _inspect(
+        self, result: DownloadResult, workspace: WorkspaceScope, *, url: str
+    ) -> None:
+        """Look inside the primary file and refuse it if it is not what was asked for.
+
+        Size was checked already; this is the part the size cannot tell -
+        whether the bytes decode, and whether there are as many seconds of them
+        as the source promised. A skipped inspection (no tool) is logged, not
+        failed: it is a fact about the device.
+        """
+        if self._inspector is None:
+            return
+        primary = result.primary
+        report = await self._inspector.inspect(workspace.path_for(primary.name))
+        if report is None:
+            logger.bind(name=primary.name).debug("Completeness check skipped")
+            return
+        verify_complete(
+            report,
+            expected_seconds=result.metadata.duration_seconds,
+            expect_video=not result.selected_format.is_audio_only,
+            url=url,
+        )
+        logger.bind(
+            name=primary.name,
+            seconds=report.duration_seconds,
+            declared=result.metadata.duration_seconds,
+            video=list(report.video_codecs),
+            audio=list(report.audio_codecs),
+            size=f"{report.width}x{report.height}" if report.width else None,
+        ).info("Delivered file verified complete")
 
     @staticmethod
     def _discard_new_files(workspace: WorkspaceScope, existing: set[str]) -> None:

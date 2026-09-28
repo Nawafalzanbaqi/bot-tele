@@ -345,6 +345,15 @@ class DownloadSettings(_ConfigSection):
             the hostname. No cookie, retry or engine update changes that,
             because the traffic never reaches the site. Sending it through a
             proxy on the far side of the filter is what changes it.
+        verify_streams: Look inside every finished file with ``ffprobe`` before
+            it is delivered, and refuse one with no decodable stream, without
+            the video stream that was asked for, or materially shorter than the
+            source declared. On by default: the engine reports the bytes it
+            received, not whether they play, and the alternative is a poster in
+            the chat that never starts. Costs milliseconds per file.
+        ffprobe_path: The executable to inspect with. A bare name is found on
+            ``PATH``; the image ships ``ffprobe`` beside ``ffmpeg``. If it is
+            missing the check is skipped with one warning, never failed.
         images_enabled: Whether to fall back to the still-image engine for
             sources the video engine finds no stream in.
 
@@ -388,6 +397,8 @@ class DownloadSettings(_ConfigSection):
     cookies_file: Path | None = None
     proxy: str | None = None
     proxy_hosts: tuple[str, ...] = ()
+    verify_streams: bool = True
+    ffprobe_path: str = Field(default="ffprobe", min_length=1)
     images_enabled: bool = True
     # Browser impersonation (curl_cffi). Applied to every request that goes
     # through the egress proxy - a shared exit address is exactly where TikTok's

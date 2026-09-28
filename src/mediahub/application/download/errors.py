@@ -218,6 +218,41 @@ class DownloadFailedError(DownloadError):
     kind: ClassVar[FailureKind] = FailureKind.TRANSIENT
 
 
+class DownloadIncompleteError(DownloadError):
+    """The transfer ended, but what landed is not the media that was asked for.
+
+    No decodable stream, a missing video stream, or a duration well short of
+    what the source declared. Distinct from :class:`DownloadFailedError`
+    because the engine reported *success*: nothing upstream noticed, and
+    without this class the file would have been uploaded as a video that shows
+    a poster and refuses to play.
+
+    Transient: a re-fetch usually completes. When it does not, the source's
+    declared duration is wrong, which the user can judge from the numbers.
+
+    Attributes:
+        expected_seconds: What the source declared, when the mismatch was one
+            of length.
+        actual_seconds: What the file holds.
+    """
+
+    code: ClassVar[str] = "download_incomplete"
+    kind: ClassVar[FailureKind] = FailureKind.TRANSIENT
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected_seconds: float | None = None,
+        actual_seconds: float | None = None,
+        provider: str | None = None,
+    ) -> None:
+        """Initialise the error with the two durations, when the fault was length."""
+        super().__init__(message, provider=provider)
+        self.expected_seconds = expected_seconds
+        self.actual_seconds = actual_seconds
+
+
 class DownloadTimeoutError(DownloadError):
     """The operation exceeded its wall-clock budget.
 
@@ -262,8 +297,7 @@ class SizeLimitExceededError(DownloadError):
     ) -> None:
         """Initialise the error from the ceiling and the observed size."""
         super().__init__(
-            f"Transfer exceeded the {limit_bytes} byte ceiling "
-            f"(observed {observed_bytes} bytes).",
+            f"Transfer exceeded the {limit_bytes} byte ceiling (observed {observed_bytes} bytes).",
             provider=provider,
         )
         self.limit_bytes = limit_bytes
@@ -349,7 +383,7 @@ class DownloaderNotConfiguredError(DownloadError, FeatureNotAvailableError):
         """Initialise the error, naming the URL that could not be fetched."""
         target = f" for '{source_url}'" if source_url else ""
         super().__init__(
-            f"No download engine is configured{target}; " f"jobs can be queued but not executed."
+            f"No download engine is configured{target}; jobs can be queued but not executed."
         )
         self.source_url = source_url
 

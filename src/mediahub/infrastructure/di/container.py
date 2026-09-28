@@ -75,6 +75,7 @@ from mediahub.infrastructure.download.ytdlp.downloader import (
     YtDlpDownloader,
     engine_thread_stats,
 )
+from mediahub.infrastructure.download.ytdlp.inspection import FfprobeInspector
 from mediahub.infrastructure.downloader.null_downloader import NullDownloader
 from mediahub.infrastructure.messaging.logging_event_publisher import LoggingEventPublisher
 from mediahub.infrastructure.persistence.memory.factory import InMemoryUnitOfWorkFactory
@@ -614,6 +615,11 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
         settings.download,
         url_policy=policy,
         address_guard=DnsAddressGuard(policy),
+        inspector=(
+            FfprobeInspector(settings.download.ffprobe_path)
+            if settings.download.verify_streams
+            else None
+        ),
     )
     if not settings.download.images_enabled:
         return video
