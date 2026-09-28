@@ -159,7 +159,9 @@ services:
   # Needs TELEGRAM_API_ID and TELEGRAM_API_HASH from https://my.telegram.org -
   # these identify the *application*, not the bot, and are not the bot token.
   botapi:
-    image: aiogram/telegram-bot-api:latest
+    # Pinned by digest (2026-09-28). `latest` moved under us without a review step; bump the
+    # digest deliberately, alongside a rebuild, and record it in the commit message.
+    image: aiogram/telegram-bot-api@sha256:6ab985144d46d024c723f4def72419d949b88ba97bf234dadf415051367a1b69
     restart: unless-stopped
     profiles: ["localapi"]
     environment:
@@ -215,7 +217,8 @@ services:
   # A kill switch is inherent: if the tunnel drops, the proxy stops answering
   # and downloads fail. They do not quietly fall back to the direct route.
   vpn:
-    image: qmcgaw/gluetun:latest
+    # Pinned by digest (2026-09-28, the build of 2026-07-31 that has run here since 08-02).
+    image: qmcgaw/gluetun@sha256:988d9cb1982f688ce51f3511057b90c5c8d01889db60a4d56e5230aebf1d3339
     restart: unless-stopped
     profiles: ["vpn"]
     cap_add:
