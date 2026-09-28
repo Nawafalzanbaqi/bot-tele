@@ -226,7 +226,9 @@ async def test_a_stranger_is_refused_and_nothing_happens(workspace_root: Path) -
 
     await gateway.poll_once()
 
-    assert "غير مصرّح" in messenger.last_text
+    # Silence, not a refusal: a reply would confirm that a bot answers here.
+    assert messenger.sent == []
+    assert messenger.edits == []
     assert uploader.uploads == []
     assert await journal.recent("telegram:1234") == ()
     assert not root.exists() or list(root.iterdir()) == []

@@ -160,12 +160,18 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
     if not isinstance(exc, StarletteHTTPException):  # pragma: no cover - defensive
         return await handle_unexpected_error(request, exc)
 
-    return problem_response(
+    response = problem_response(
         request=request,
         status_code=exc.status_code,
         detail=str(exc.detail),
         code=HTTPStatus(exc.status_code).name.lower(),
     )
+    # An HTTPException may carry headers that are part of its meaning - a 401's
+    # WWW-Authenticate names the credential a caller must present. Rendering the
+    # body in problem-details form must not drop them.
+    for name, value in (exc.headers or {}).items():
+        response.headers[name] = value
+    return response
 
 
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
