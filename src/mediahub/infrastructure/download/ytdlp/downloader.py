@@ -94,6 +94,12 @@ except ImportError:  # pragma: no cover - the engine is an optional install
     _YoutubeDL = None
     _ENGINE_VERSION = "unavailable"
 
+_ImpersonateTarget: Any = None
+try:  # pragma: no cover - depends on the yt-dlp build and on curl_cffi being present
+    from yt_dlp.networking.impersonate import ImpersonateTarget as _ImpersonateTarget
+except ImportError:  # pragma: no cover - older yt-dlp, or no impersonation support
+    pass
+
 ENGINE_NAME: Final[str] = "yt-dlp"
 _THREAD_DRAIN_SECONDS: Final[float] = 30.0
 _IMAGE_EXTENSIONS: Final[frozenset[str]] = frozenset(
@@ -373,13 +379,16 @@ def _impersonate_target(name: str) -> Any:  # pragma: no cover - depends on the 
     constructs the real engine. A missing curl_cffi or an unknown target name
     degrades to yt-dlp's own client with a warning rather than a failed download.
     """
-    try:
-        from yt_dlp.networking.impersonate import ImpersonateTarget
-
-        return ImpersonateTarget.from_str(name)
-    except Exception:
+    if _ImpersonateTarget is None:
         logger.bind(target=name).warning(
             "Browser impersonation is unavailable in this build; continuing without it"
+        )
+        return None
+    try:
+        return _ImpersonateTarget.from_str(name)
+    except Exception:
+        logger.bind(target=name).warning(
+            "Unknown impersonation target; continuing without a browser fingerprint"
         )
         return None
 

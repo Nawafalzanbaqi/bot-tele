@@ -13,6 +13,7 @@ import pytest
 
 from mediahub.application.download.errors import (
     AuthenticationRequiredError,
+    ContentRemovedError,
     MetadataUnavailableError,
 )
 from mediahub.application.download.ports import DownloadRequest, FormatSelection
@@ -114,7 +115,7 @@ class TestWhatEscalates:
         [
             ("This video is private", MetadataUnavailableError),
             ("Sign in to confirm your age", AuthenticationRequiredError),
-            ("The video has been deleted", MetadataUnavailableError),
+            ("The video has been deleted", ContentRemovedError),
         ],
         ids=["private", "age-gate", "deleted"],
     )
