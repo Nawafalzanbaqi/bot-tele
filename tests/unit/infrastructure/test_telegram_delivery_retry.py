@@ -48,7 +48,7 @@ class FlakyUploader(FakeUploader):
         super().__init__()
         self.failures = list(failures)
 
-    async def send_media(self, **kwargs: Any) -> Any:  # type: ignore[override]
+    async def send_media(self, **kwargs: Any) -> Any:
         if self.failures:
             raise self.failures.pop(0)
         return await super().send_media(**kwargs)
@@ -70,7 +70,9 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def fake_sleep(seconds: float) -> None:
         delays.append(seconds)
 
-    monkeypatch.setattr(provider_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        "mediahub.infrastructure.delivery.telegram.provider.asyncio.sleep", fake_sleep
+    )
     return delays
 
 
@@ -142,6 +144,7 @@ class TestTheRetry:
 
         receipt = await local_provider(uploader).deliver(request_for(scope), scope)
 
+        assert receipt.message is not None
         assert receipt.message.message_id == "500"
         assert len(uploader.uploads) == 1
         assert no_sleep == [provider_module.RETRY_DELAY_SECONDS]

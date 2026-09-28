@@ -196,7 +196,7 @@ class TestACollectionResolvesToItsFirstEntry:
             settings,
             url_policy=UrlPolicy(),
             address_guard=None,
-            youtube_dl_factory=ByUrl,  # type: ignore[arg-type]
+            youtube_dl_factory=ByUrl,
         )
 
     async def test_the_first_entry_is_probed_and_described(

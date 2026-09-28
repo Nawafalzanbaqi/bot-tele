@@ -371,7 +371,7 @@ class TestDeliveryPolicy:
         return AcquireMedia(
             downloader=engine(
                 info=video_info(requested_downloads=[taken]),
-                script=download_script(size_bytes=4096),  # type: ignore[arg-type]
+                script=download_script(size_bytes=4096),
             ),
             delivery=router_over(delivery),
             workspace=FilesystemWorkspace(tmp_path / "ws"),

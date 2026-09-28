@@ -25,7 +25,7 @@ from mediahub.shared.config.settings import DownloadSettings
 from tests.support.ytdlp_fakes import FakeYoutubeDL, video_info, writes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from mediahub.application.workspace.ports import WorkspaceScope
@@ -63,7 +63,7 @@ def settings(**overrides: object) -> DownloadSettings:
 
 
 def failing_directly(
-    error: BaseException, *, script: tuple[Callable[[FakeYoutubeDL], None], ...] = ()
+    error: BaseException, *, script: Sequence[Callable[[FakeYoutubeDL], None]] = ()
 ) -> tuple[Callable[[Mapping[str, Any]], FakeYoutubeDL], list[Mapping[str, Any]]]:
     """Return a factory whose engine fails on the direct path and succeeds via the proxy."""
     attempts: list[Mapping[str, Any]] = []

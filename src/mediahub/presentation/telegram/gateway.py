@@ -31,7 +31,7 @@ import asyncio
 import contextlib
 import time
 from collections import deque
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from loguru import logger
 
@@ -41,7 +41,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
 
     from mediahub.presentation.telegram.api import TelegramMessenger
-    from mediahub.presentation.telegram.handlers import TelegramHandlers
     from mediahub.presentation.telegram.updates import Intent
 
 DEFAULT_POLL_TIMEOUT_SECONDS: Final[int] = 30
@@ -78,6 +77,24 @@ abandoned any download that needed it, contradicting the promise in
 """
 
 
+class UpdateHandlers(Protocol):
+    """What the gateway needs from whoever serves updates.
+
+    Two methods, and only these two: the gateway hands an intent over and, at
+    shutdown, asks for running work to finish. Naming the contract keeps the
+    loop testable with a recording stand-in and keeps it from reaching into
+    the handlers for anything else.
+    """
+
+    async def handle(self, intent: Intent) -> None:
+        """Serve one parsed update."""
+        ...
+
+    async def drain(self, *, timeout: float = ...) -> None:  # noqa: ASYNC109 - a budget, not an asyncio deadline
+        """Wait for running acquisitions to finish, within ``timeout`` seconds."""
+        ...
+
+
 class TelegramGateway:
     """Polls Telegram and feeds updates to the handlers."""
 
@@ -97,7 +114,7 @@ class TelegramGateway:
     def __init__(
         self,
         messenger: TelegramMessenger,
-        handlers: TelegramHandlers,
+        handlers: UpdateHandlers,
         *,
         poll_timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
         heartbeat_path: Path | None = None,
