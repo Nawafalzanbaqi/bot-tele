@@ -94,11 +94,10 @@ except ImportError:  # pragma: no cover - the engine is an optional install
     _YoutubeDL = None
     _ENGINE_VERSION = "unavailable"
 
-_ImpersonateTarget: Any = None
-try:  # pragma: no cover - depends on the yt-dlp build and on curl_cffi being present
+try:  # pragma: no cover - depends on the yt-dlp build
     from yt_dlp.networking.impersonate import ImpersonateTarget as _ImpersonateTarget
 except ImportError:  # pragma: no cover - older yt-dlp, or no impersonation support
-    pass
+    _ImpersonateTarget = None
 
 ENGINE_NAME: Final[str] = "yt-dlp"
 _THREAD_DRAIN_SECONDS: Final[float] = 30.0
