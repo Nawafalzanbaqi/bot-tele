@@ -611,10 +611,11 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
         return NullDownloader()
 
     policy = UrlPolicy(block_private_networks=settings.security.block_private_networks)
+    guard = DnsAddressGuard(policy)
     video = YtDlpDownloader(
         settings.download,
         url_policy=policy,
-        address_guard=DnsAddressGuard(policy),
+        address_guard=guard,
         inspector=(
             FfprobeInspector(settings.download.ffprobe_path)
             if settings.download.verify_streams
@@ -624,7 +625,7 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
     if not settings.download.images_enabled:
         return video
 
-    images = GalleryDlDownloader(settings.download, url_policy=policy)
+    images = GalleryDlDownloader(settings.download, url_policy=policy, address_guard=guard)
     if not images.is_available:
         # Configured for images and unable to fetch them. Worth a line, because
         # the symptom is otherwise a photo post refused exactly as before and
