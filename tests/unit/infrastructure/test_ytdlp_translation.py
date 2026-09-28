@@ -16,6 +16,7 @@ from mediahub.application.download.errors import (
     ConnectionBlockedError,
     ContentRemovedError,
     DownloadFailedError,
+    DrmProtectedError,
     FormatUnavailableError,
     GeoRestrictedError,
     MetadataUnavailableError,
@@ -264,6 +265,8 @@ class TestErrorClassification:
             # Throttling, not a login wall. This phrase used to be classified
             # as a permanent authentication failure and was never retried.
             ("Please wait a few minutes before you try again.", RateLimitedError),
+            ("This video is DRM protected", DrmProtectedError),
+            ("Requested format is not available. DRM protected: Widevine", DrmProtectedError),
             ("Sign in to confirm you’re not a bot", AuthenticationRequiredError),  # noqa: RUF001
             ("HTTP Error 503: Service Unavailable", ProviderError),
             ("The read operation timed out", ProviderError),

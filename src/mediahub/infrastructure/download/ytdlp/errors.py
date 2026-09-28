@@ -29,6 +29,7 @@ from mediahub.application.download.errors import (
     ContentRemovedError,
     DownloadError,
     DownloadFailedError,
+    DrmProtectedError,
     FormatUnavailableError,
     GeoRestrictedError,
     MetadataUnavailableError,
@@ -48,6 +49,20 @@ _RETRY_AFTER_PATTERN: Final[re.Pattern[str]] = re.compile(
 # Ordered: the first matching rule wins, so put specific phrases before generic
 # ones. Each entry is (needles, error factory).
 _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...]] = (
+    # Encrypted by design. First, because the phrases below can be accompanied
+    # by "no video formats found" and that must not be read as a photo post.
+    (
+        (
+            "drm protected",
+            "drm-protected",
+            "is drm",
+            "protected by drm",
+            "widevine",
+            "fairplay",
+            "playready",
+        ),
+        DrmProtectedError,
+    ),
     (("unsupported url", "no suitable extractor", "is not a valid url"), UnsupportedProviderError),
     # A rendition that was asked for and does not exist - a stale format id from
     # an old probe. Deliberately *not* "no formats found", which means the
@@ -146,7 +161,6 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "age-restricted",
             "who has blocked it",
             "this live event has ended",
-            "drm",
             "paid members",
             "requires purchase",
         ),

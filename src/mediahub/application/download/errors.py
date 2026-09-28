@@ -114,6 +114,19 @@ class GeoRestrictedError(DownloadError):
     kind: ClassVar[FailureKind] = FailureKind.PERMANENT
 
 
+class DrmProtectedError(DownloadError):
+    """The source is encrypted with DRM and cannot be fetched by design.
+
+    Streaming services (Netflix, Shahid, Disney+, Prime Video, Spotify and the
+    like) are out of scope, not broken: the engine sees the manifest and cannot
+    decrypt it, and nothing - no cookies, no proxy, no retry - changes that. Its
+    own code so the answer can say exactly this instead of "could not read".
+    """
+
+    code: ClassVar[str] = "drm_protected"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
 class ContentRemovedError(DownloadError):
     """The source is gone: deleted, suspended, or never existed.
 

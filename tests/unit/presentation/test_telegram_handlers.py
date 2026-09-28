@@ -379,6 +379,26 @@ class TestCancelCommand:
 
 
 class TestUrlFlow:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.netflix.com/watch/81234567",
+            "https://shahid.mbc.net/ar/movies/x/movie-1",
+            "https://open.spotify.com/track/abc",
+            "https://tv.apple.com/show/x",
+        ],
+    )
+    async def test_a_drm_service_is_refused_clearly_and_without_a_probe(
+        self, messenger: FakeMessenger, url: str
+    ) -> None:
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update(url))
+
+        assert probe.calls == [], "the answer is known before any request is made"
+        assert "DRM" in messenger.last_text
+
     async def test_a_link_is_probed_and_answered_with_buttons(
         self, messenger: FakeMessenger
     ) -> None:

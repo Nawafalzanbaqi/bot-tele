@@ -82,6 +82,36 @@ target built here is one that provider accepts.
 
 URL_PREFIXES: Final[tuple[str, ...]] = ("http://", "https://")
 
+DRM_HOSTS: Final[frozenset[str]] = frozenset(
+    {
+        "netflix.com",
+        "shahid.net",
+        "shahid.mbc.net",
+        "disneyplus.com",
+        "primevideo.com",
+        "amazon.com",
+        "hbomax.com",
+        "max.com",
+        "hulu.com",
+        "spotify.com",
+        "open.spotify.com",
+        "music.apple.com",
+        "tv.apple.com",
+        "osnplus.com",
+        "osn.com",
+        "starzplay.com",
+        "paramountplus.com",
+        "peacocktv.com",
+        "crunchyroll.com",
+    }
+)
+"""Streaming services whose content is DRM-encrypted end to end.
+
+Answered before any probe: the engine would only report the same thing after
+spending a slot and thirty seconds, and the honest answer - out of scope by
+design - is better given immediately. Subdomains count.
+"""
+
 MAX_UPLOAD_BYTES: Final[int] = 2 * 1024 * 1024
 """Ceiling on a file the gateway will read into memory.
 
@@ -258,6 +288,9 @@ class TelegramHandlers:
         text = (intent.text or "").strip()
         if not text.lower().startswith(URL_PREFIXES):
             await self._say(intent, formatters.render_help())
+            return
+        if _is_drm_service(text):
+            await self._say(intent, formatters.render_error("drm_protected"))
             return
 
         try:
@@ -545,6 +578,15 @@ A table rather than a chain of conditions, for the same reason the domain's
 permissions are one: adding a command means adding a line here, where the
 decision is visible, instead of an ``if`` buried in a handler.
 """
+
+
+def _is_drm_service(url: str) -> bool:
+    """Return whether a URL points at a service that is DRM-encrypted by design."""
+    authority = url.split("//", maxsplit=1)[-1].split("/", maxsplit=1)[0]
+    host = authority.split("@")[-1].split(":")[0].lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == name or host.endswith(f".{name}") for name in DRM_HOSTS)
 
 
 def _action_for(intent: Intent) -> Action:
