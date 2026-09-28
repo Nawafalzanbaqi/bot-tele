@@ -16,12 +16,12 @@
 #
 # Three properties of this file exist because the device is shared:
 #
-# * **No database service.** SQLite is the system of record (ADR-0006). The
-#   host already runs two PostgreSQL instances and a Redis for other projects;
-#   a third would cost 200 MB to store a few thousand rows.
-# * **Every port is deliberate and none is a default.** 8000 belongs to
-#   devpulse, 4000 to engineeringos, 3001 to uptime-kuma. The API is published
-#   on 8090 and bound to loopback.
+# * **No database service.** SQLite is the system of record (ADR-0006). A
+#   database server would cost 200 MB of a 4 GB board to store a few thousand
+#   rows.
+# * **Every port is deliberate and none is a default.** The host's own
+#   services hold 53/80 (Pi-hole), 3001 (uptime-kuma) and 2283 (Immich). The
+#   API is published on 8090 and bound to loopback.
 # * **Memory limits on every service.** An unbounded download or upload on a
 #   4 GB board is not this project failing, it is the OOM killer choosing a
 #   victim among someone else's containers.
@@ -221,8 +221,14 @@ services:
   #   VPN_SERVICE_PROVIDER, VPN_TYPE, and the credentials your provider uses
   #   MEDIAHUB_DOWNLOAD__PROXY=http://vpn:8888
   #
-  # A kill switch is inherent: if the tunnel drops, the proxy stops answering
-  # and downloads fail. They do not quietly fall back to the direct route.
+  # The engine goes **direct first** and escalates: a fetch that is refused
+  # in a way that names the exit address (403, geo-fence, reset, "your IP is
+  # blocked", bot wall) is retried once through this proxy with a browser
+  # fingerprint, and that host is then routed through it for the life of the
+  # process (MEDIAHUB_DOWNLOAD__PROXY_HOSTS lists hosts that start here).
+  # The kill switch is for that routed traffic: if the tunnel drops, the
+  # proxy stops answering and those fetches fail. They never quietly fall
+  # back to the direct route. Everything else was never in the tunnel.
   vpn:
     # Pinned by digest (2026-09-28, the build of 2026-07-31 that has run here since 08-02).
     image: qmcgaw/gluetun@sha256:988d9cb1982f688ce51f3511057b90c5c8d01889db60a4d56e5230aebf1d3339
