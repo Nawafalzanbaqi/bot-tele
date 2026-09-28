@@ -389,8 +389,21 @@ class DownloadSettings(_ConfigSection):
     proxy: str | None = None
     proxy_hosts: tuple[str, ...] = ()
     images_enabled: bool = True
+    # Browser impersonation (curl_cffi). Applied to every request that goes
+    # through the egress proxy - a shared exit address is exactly where TikTok's
+    # short-link resolver answers 403 to a plain client and 200 to a browser
+    # fingerprint (measured 2026-09-28) - and, on the direct path, to the hosts
+    # listed below, which fingerprint the TLS handshake regardless of address.
+    # None disables it everywhere.
+    impersonate: str | None = "chrome"
+    impersonate_hosts: tuple[str, ...] = (
+        "tiktok.com",
+        "instagram.com",
+        "facebook.com",
+        "dailymotion.com",
+    )
 
-    @field_validator("proxy_hosts", mode="before")
+    @field_validator("proxy_hosts", "impersonate_hosts", mode="before")
     @classmethod
     def _split_hosts(cls, value: object) -> object:
         """Accept a comma-separated list, not only JSON.

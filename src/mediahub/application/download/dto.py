@@ -267,6 +267,8 @@ class AcquisitionSummary:
     message_id: str | None = None
     local_copy_released: bool = True
     items_delivered: int = 1
+    via_proxy: bool = False
+    """Whether the fetch went through the egress proxy rather than the direct path."""
 
 
 # --------------------------------------------------------------------------- #

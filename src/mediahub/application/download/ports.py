@@ -514,6 +514,9 @@ class DownloadResult:
         started_at: When the download began (UTC).
         finished_at: When it completed (UTC).
         resumed: Whether a partial file from a previous attempt was continued.
+        via_proxy: Whether the bytes came through the configured egress proxy
+            rather than the direct path. Reported to the user, because which
+            path worked is the one fact that explains a slow or a failed fetch.
     """
 
     url: str
@@ -525,6 +528,7 @@ class DownloadResult:
     started_at: datetime
     finished_at: datetime
     resumed: bool = False
+    via_proxy: bool = False
 
     def __post_init__(self) -> None:
         """Enforce that exactly one artifact is the media itself."""

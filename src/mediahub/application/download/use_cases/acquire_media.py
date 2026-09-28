@@ -229,6 +229,7 @@ class AcquireMedia:
             bytes=receipt.size_bytes,
             seconds=round(elapsed, 2),
             custodian=receipt.can_serve_back,
+            egress="proxy" if result.via_proxy else "direct",
         ).info("Acquired and delivered; local copy released")
 
         return AcquisitionSummary(
@@ -244,6 +245,7 @@ class AcquireMedia:
             delivered_at=receipt.delivered_at,
             local_copy_released=True,
             items_delivered=1 + extra,
+            via_proxy=result.via_proxy,
         )
 
     @staticmethod

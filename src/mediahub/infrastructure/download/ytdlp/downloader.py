@@ -42,6 +42,7 @@ from mediahub.application.download.errors import (
     DownloadCancelledError,
     DownloadError,
     DownloadTimeoutError,
+    GeoRestrictedError,
     LiveSourceNotAllowedError,
     MetadataUnavailableError,
     PlaylistNotAllowedError,
@@ -125,13 +126,34 @@ class ProxyPolicy:
     even that.
     """
 
-    __slots__ = ("_learned", "_listed", "_lock", "_proxy")
+    __slots__ = ("_impersonate", "_impersonate_hosts", "_learned", "_listed", "_lock", "_proxy")
 
-    def __init__(self, proxy: str | None, hosts: Sequence[str] = ()) -> None:
-        """Bind the policy to an egress and the hosts known to need it."""
+    def __init__(
+        self,
+        proxy: str | None,
+        hosts: Sequence[str] = (),
+        *,
+        impersonate: str | None = None,
+        impersonate_hosts: Sequence[str] = (),
+    ) -> None:
+        """Bind the policy to an egress, the hosts known to need it, and a browser fingerprint.
+
+        Args:
+            proxy: The egress, or ``None`` when there is none to fall back to.
+            hosts: Hosts routed through the egress from the first attempt.
+            impersonate: curl_cffi target presented on every proxied request
+                and on direct requests to ``impersonate_hosts``; ``None`` to
+                never impersonate.
+            impersonate_hosts: Hosts that fingerprint the TLS handshake and so
+                need the browser fingerprint even on the direct path.
+        """
         self._proxy = proxy or None
         self._listed = frozenset(host.lower().lstrip(".") for host in hosts if host)
         self._learned: set[str] = set()
+        self._impersonate = impersonate or None
+        self._impersonate_hosts = frozenset(
+            host.lower().lstrip(".") for host in impersonate_hosts if host
+        )
         # Probes and fetches run on engine threads; the set is written from
         # whichever one first meets a reset.
         self._lock = threading.Lock()
@@ -148,8 +170,21 @@ class ProxyPolicy:
         lowered = host.lower()
         with self._lock:
             known = self._listed | self._learned
-        matched = any(lowered == name or lowered.endswith(f".{name}") for name in known)
-        return self._proxy if matched else None
+        return self._proxy if _matches(lowered, known) else None
+
+    def impersonation_for(self, host: str, *, proxied: bool) -> str | None:
+        """Return the browser fingerprint to present to ``host``, if any.
+
+        Always on a proxied request - a shared exit address is where bot walls
+        look hardest, and it is the difference between 403 and 200 on TikTok's
+        short-link resolver - and on the direct path only for hosts known to
+        fingerprint the handshake regardless of where it comes from.
+        """
+        if self._impersonate is None:
+            return None
+        if proxied or _matches(host.lower(), self._impersonate_hosts):
+            return self._impersonate
+        return None
 
     def escalate(self, host: str) -> str | None:
         """Remember that ``host`` needs the egress, and return it.
@@ -172,6 +207,37 @@ class ProxyPolicy:
         """Return the hosts discovered to need the egress. Diagnostic helper."""
         with self._lock:
             return tuple(sorted(self._learned))
+
+
+def _matches(host: str, names: frozenset[str]) -> bool:
+    """Return whether ``host`` is one of ``names`` or a subdomain of one."""
+    return any(host == name or host.endswith(f".{name}") for name in names)
+
+
+_ESCALATION_SIGNATURES: Final[tuple[str, ...]] = (
+    "http error 403",
+    "forbidden",
+    "access denied",
+    "your ip address is blocked",
+    "unable to extract",
+    "not available in your",
+    "blocked in your",
+)
+"""Failure text that names the *address*, not the content, as the problem.
+
+Each of these has been seen to succeed from a different exit: a 403 on a
+resolver that fingerprints or rate-limits by IP, an explicit "your IP is
+blocked", TikTok's "unable to extract" bot wall, and geo-fences. A private video
+or a deleted post is deliberately not here - they fail identically everywhere.
+"""
+
+
+def _should_escalate(error: DownloadError) -> bool:
+    """Return whether a failure is one a different exit address might cure."""
+    if isinstance(error, (ConnectionBlockedError, GeoRestrictedError)):
+        return True
+    text = str(error).lower()
+    return any(signature in text for signature in _ESCALATION_SIGNATURES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,8 +353,35 @@ def default_youtube_dl_factory(options: Mapping[str, Any]) -> YoutubeDLLike:
     if _YoutubeDL is None:  # pragma: no cover - depends on the environment
         message = "yt-dlp is not installed; the download engine cannot run"
         raise MetadataUnavailableError(message)
-    engine: YoutubeDLLike = _YoutubeDL(dict(options))
+    prepared = dict(options)
+    target = prepared.get("impersonate")
+    if isinstance(target, str):  # pragma: no cover - depends on the environment
+        resolved = _impersonate_target(target)
+        if resolved is None:
+            prepared.pop("impersonate")
+        else:
+            prepared["impersonate"] = resolved
+    engine: YoutubeDLLike = _YoutubeDL(prepared)
     return engine
+
+
+def _impersonate_target(name: str) -> Any:  # pragma: no cover - depends on the environment
+    """Turn a target name into yt-dlp's own type, or ``None`` if it cannot be honoured.
+
+    The options module keeps the name as a plain string so it stays free of
+    yt-dlp imports; the conversion belongs here, next to the only place that
+    constructs the real engine. A missing curl_cffi or an unknown target name
+    degrades to yt-dlp's own client with a warning rather than a failed download.
+    """
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+
+        return ImpersonateTarget.from_str(name)
+    except Exception:
+        logger.bind(target=name).warning(
+            "Browser impersonation is unavailable in this build; continuing without it"
+        )
+        return None
 
 
 class YtDlpDownloader:
@@ -322,7 +415,12 @@ class YtDlpDownloader:
         self._url_policy = url_policy or UrlPolicy()
         self._address_guard = address_guard
         self._factory = youtube_dl_factory or default_youtube_dl_factory
-        self._proxy_policy = proxy_policy or ProxyPolicy(settings.proxy, settings.proxy_hosts)
+        self._proxy_policy = proxy_policy or ProxyPolicy(
+            settings.proxy,
+            settings.proxy_hosts,
+            impersonate=settings.impersonate,
+            impersonate_hosts=settings.impersonate_hosts,
+        )
 
     # -- Port surface --------------------------------------------------------
 
@@ -408,9 +506,11 @@ class YtDlpDownloader:
         try:
             bridge.stage(DownloadStage.SELECTING)
 
-            async def run(proxy: str | None) -> Mapping[str, Any]:
+            async def run(proxy: str | None, impersonate: str | None) -> Mapping[str, Any]:
                 return await self._run_guarded(
-                    lambda: self._blocking_fetch(request, validated, workspace, bridge, proxy),
+                    lambda: self._blocking_fetch(
+                        request, validated, workspace, bridge, proxy, impersonate
+                    ),
                     timeout_seconds=budget,
                     cancellation=cancellation,
                     url=validated.value,
@@ -422,7 +522,7 @@ class YtDlpDownloader:
             # reason. Without this a flaky quarter of attempts reached the user
             # as a flat failure - "some links work and some do not", with
             # nothing to tell them apart.
-            info = await retry_async(
+            info, via_proxy = await retry_async(
                 lambda: self._with_egress_fallback(run, host=validated.host),
                 schedule=RetrySchedule(
                     attempts=self._settings.download_attempts,
@@ -439,6 +539,7 @@ class YtDlpDownloader:
                 existing=existing,
                 started_at=started_at,
                 max_bytes=max_bytes,
+                via_proxy=via_proxy,
             )
         except BaseException:
             self._discard_new_files(workspace, existing)
@@ -469,31 +570,45 @@ class YtDlpDownloader:
 
     async def _with_egress_fallback(
         self,
-        run: Callable[[str | None], Awaitable[Mapping[str, Any]]],
+        run: Callable[[str | None, str | None], Awaitable[Mapping[str, Any]]],
         *,
         host: str,
-    ) -> Mapping[str, Any]:
-        """Run an engine call, retrying through the egress if the path is cut.
+    ) -> tuple[Mapping[str, Any], bool]:
+        """Run an engine call, retrying through the egress if the *address* was the problem.
 
-        The retry is deliberately narrow. Only
-        :class:`~mediahub.application.download.errors.ConnectionBlockedError`
-        triggers it, because only that failure means "the connection opened and
-        something in the path closed it" - which is the one thing a different
-        egress can cure. A 404, a private video or an expired session would fail
-        identically through a tunnel, and retrying them there would double the
-        time to report a failure that was already final.
+        Returns the engine's answer and whether it came through the proxy, so
+        the caller can say which path worked.
+
+        The retry is deliberately narrow. It fires for a reset connection, a
+        geo-fence, a 403, an explicit "your IP is blocked" and a bot wall - the
+        failures that name the exit address rather than the content, and the
+        ones a different exit has actually been seen to cure. A 404, a private
+        video or an expired session would fail identically through a tunnel, and
+        retrying them there would double the time to report a failure that was
+        already final.
 
         At most one escalation: if the host was already being routed, the proxy
-        is not the answer and the first error is the honest one.
+        is not the answer and the first error is the honest one. Proxied
+        requests present a browser fingerprint (see
+        :meth:`ProxyPolicy.impersonation_for`); direct ones do so only for hosts
+        known to need it.
         """
         proxy = self._proxy_policy.for_host(host)
+        proxied = proxy is not None
         try:
-            return await run(proxy)
-        except ConnectionBlockedError:
+            info = await run(proxy, self._proxy_policy.impersonation_for(host, proxied=proxied))
+        except DownloadError as error:
+            if not _should_escalate(error):
+                raise
             escalated = self._proxy_policy.escalate(host)
             if escalated is None:
                 raise
-        return await run(escalated)
+            logger.bind(host=host, code=error.code).info(
+                "Refused on the direct path; retrying through the egress proxy"
+            )
+            info = await run(escalated, self._proxy_policy.impersonation_for(host, proxied=True))
+            return info, True
+        return info, proxied
 
     # -- Probing -------------------------------------------------------------
 
@@ -502,17 +617,20 @@ class YtDlpDownloader:
     ) -> MediaMetadata:
         """Perform one probe attempt, escalating to the egress if cut off."""
 
-        async def run(proxy: str | None) -> Mapping[str, Any]:
+        async def run(proxy: str | None, impersonate: str | None) -> Mapping[str, Any]:
             return await self._run_guarded(
                 lambda: self._blocking_probe(
-                    validated, timeout_seconds=timeout_seconds, proxy=proxy
+                    validated,
+                    timeout_seconds=timeout_seconds,
+                    proxy=proxy,
+                    impersonate=impersonate,
                 ),
                 timeout_seconds=timeout_seconds,
                 cancellation=None,
                 url=validated.value,
             )
 
-        info = await self._with_egress_fallback(run, host=validated.host)
+        info, via_proxy = await self._with_egress_fallback(run, host=validated.host)
         metadata = to_metadata(info, url=validated.value, probed_at=datetime.now(UTC))
         logger.bind(
             provider=metadata.provider,
@@ -520,11 +638,17 @@ class YtDlpDownloader:
             live=metadata.is_live,
             playlist=metadata.is_playlist,
             expected_bytes=metadata.expected_bytes,
+            egress="proxy" if via_proxy else "direct",
         ).debug("Probed source")
         return metadata
 
     def _blocking_probe(
-        self, validated: ValidatedUrl, *, timeout_seconds: float, proxy: str | None = None
+        self,
+        validated: ValidatedUrl,
+        *,
+        timeout_seconds: float,
+        proxy: str | None = None,
+        impersonate: str | None = None,
     ) -> Mapping[str, Any]:
         """Extract metadata synchronously. Runs in a worker thread."""
         options = build_probe_options(
@@ -532,6 +656,7 @@ class YtDlpDownloader:
             allow_playlist=True,
             socket_timeout_seconds=min(timeout_seconds, self._settings.socket_timeout_seconds),
             proxy=proxy,
+            impersonate=impersonate,
         )
         engine = self._factory(options)
         try:
@@ -556,6 +681,7 @@ class YtDlpDownloader:
         workspace: WorkspaceScope,
         bridge: ProgressBridge,
         proxy: str | None = None,
+        impersonate: str | None = None,
     ) -> Mapping[str, Any]:
         """Download synchronously. Runs in a worker thread."""
         options = build_download_options(
@@ -566,6 +692,7 @@ class YtDlpDownloader:
             progress_hook=bridge.on_download_hook,
             postprocessor_hook=bridge.on_postprocessor_hook,
             proxy=proxy,
+            impersonate=impersonate,
         )
         engine = self._factory(options)
         try:
@@ -671,6 +798,7 @@ class YtDlpDownloader:
         existing: set[str],
         started_at: datetime,
         max_bytes: int | None,
+        via_proxy: bool = False,
     ) -> DownloadResult:
         """Verify what landed on disk and describe it."""
         metadata = to_metadata(info, url=validated.value, probed_at=started_at)
@@ -699,6 +827,7 @@ class YtDlpDownloader:
             started_at=started_at,
             finished_at=datetime.now(UTC),
             resumed=request.resume and bool(existing),
+            via_proxy=via_proxy,
         )
 
     @staticmethod

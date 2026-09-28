@@ -27,7 +27,9 @@ title is preserved in metadata where it cannot become a path.
 """
 
 
-def base_options(settings: DownloadSettings, *, proxy: str | None = None) -> dict[str, Any]:
+def base_options(
+    settings: DownloadSettings, *, proxy: str | None = None, impersonate: str | None = None
+) -> dict[str, Any]:
     """Return options shared by probing and downloading.
 
     Every entry marked *security* is load-bearing; changing one changes what the
@@ -40,6 +42,11 @@ def base_options(settings: DownloadSettings, *, proxy: str | None = None) -> dic
             **which** requests need an egress is a decision, and it is not this
             module's: see
             :class:`~mediahub.infrastructure.download.ytdlp.downloader.ProxyPolicy`.
+        impersonate: Browser fingerprint to present (a curl_cffi target name
+            such as ``chrome``), or ``None`` for yt-dlp's own client. Also a per
+            call decision, made by the same policy. Kept as a string here so
+            this module stays free of yt-dlp imports; the engine factory turns
+            it into the library's own target type.
     """
     options: dict[str, Any] = {
         # Quiet: MediaHub owns its own logging and progress reporting.
@@ -83,6 +90,8 @@ def base_options(settings: DownloadSettings, *, proxy: str | None = None) -> dic
         options["cookiefile"] = str(settings.cookies_file)
     if proxy:
         options["proxy"] = proxy
+    if impersonate:
+        options["impersonate"] = impersonate
     return options
 
 
@@ -92,6 +101,7 @@ def build_probe_options(
     allow_playlist: bool = False,
     socket_timeout_seconds: float | None = None,
     proxy: str | None = None,
+    impersonate: str | None = None,
 ) -> dict[str, Any]:
     """Return options for a metadata-only extraction.
 
@@ -99,7 +109,7 @@ def build_probe_options(
     counted without resolving every entry, so probing a channel costs one
     request rather than five hundred.
     """
-    options = base_options(settings, proxy=proxy)
+    options = base_options(settings, proxy=proxy, impersonate=impersonate)
     options.update(
         {
             "skip_download": True,
@@ -122,6 +132,7 @@ def build_download_options(
     progress_hook: Callable[[Mapping[str, Any]], None],
     postprocessor_hook: Callable[[Mapping[str, Any]], None],
     proxy: str | None = None,
+    impersonate: str | None = None,
 ) -> dict[str, Any]:
     """Return options for an actual download into ``directory``.
 
@@ -136,8 +147,9 @@ def build_download_options(
         progress_hook: Receives yt-dlp download hook payloads.
         postprocessor_hook: Receives yt-dlp post-processor hook payloads.
         proxy: Egress to route this download through, or ``None`` for direct.
+        impersonate: Browser fingerprint to present, or ``None``.
     """
-    options = base_options(settings, proxy=proxy)
+    options = base_options(settings, proxy=proxy, impersonate=impersonate)
     options.update(
         {
             # security: confine every write, including temporary part-files.

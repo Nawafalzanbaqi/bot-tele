@@ -257,12 +257,17 @@ def render_delivery_progress(progress: DeliveryProgress, *, title: str) -> str:
 
 def render_delivered(summary: AcquisitionSummary) -> str:
     """Render the confirmation shown once the file has been sent."""
-    return (
-        f"{_clip(summary.title, _MAX_TITLE)}\n"
+    lines = [
+        _clip(summary.title, _MAX_TITLE),
         f"✅ تم الإرسال · {summary.quality_label} · "
-        f"{_bytes(summary.bytes_delivered)} · {_duration(summary.elapsed_seconds)}\n"
-        "🗑 حُذفت النسخة من الجهاز."
-    )
+        f"{_bytes(summary.bytes_delivered)} · {_duration(summary.elapsed_seconds)}",
+    ]
+    if summary.via_proxy:
+        # Said only when it happened: the direct path is the normal one, and a
+        # line about the route on every message would stop being read.
+        lines.append("🛡 جُلب عبر نفق الخروج بعد أن رُفض المسار المباشر.")
+    lines.append("🗑 حُذفت النسخة من الجهاز.")
+    return "\n".join(lines)
 
 
 def render_history(entries: Sequence[HistoryEntrySummary]) -> str:
