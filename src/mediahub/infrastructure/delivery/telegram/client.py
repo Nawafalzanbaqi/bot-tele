@@ -340,7 +340,7 @@ class PythonTelegramBotClient:
         height: int | None = None,
         thumbnail: Path | None = None,
         local_path: Path | None = None,
-    ) -> UploadedMedia:  # pragma: no cover - requires the network
+    ) -> UploadedMedia:
         """Upload a stream, presenting it according to ``kind``.
 
         When ``local_path`` is given **and** a self-hosted server is in use, the
@@ -395,7 +395,7 @@ class PythonTelegramBotClient:
         reference: str,
         kind: str,
         caption: str | None = None,
-    ) -> UploadedMedia:  # pragma: no cover - requires the network
+    ) -> UploadedMedia:
         """Send something Telegram already holds, by its own reference.
 
         Passing the reference where a file would go is Telegram's own idiom for
@@ -438,9 +438,7 @@ def _opened(path: Path | None) -> Iterator[io.BufferedReader | None]:
         handle.close()
 
 
-def _uploaded(
-    message: Any, media: Any, *, bytes_sent: int
-) -> UploadedMedia:  # pragma: no cover - requires the network
+def _uploaded(message: Any, media: Any, *, bytes_sent: int) -> UploadedMedia:
     """Build the adapter's own result from the library's message object."""
     return UploadedMedia(
         message_id=int(message.message_id),
@@ -451,7 +449,7 @@ def _uploaded(
     )
 
 
-def _stream_size(content: io.IOBase) -> int:  # pragma: no cover - requires the network
+def _stream_size(content: io.IOBase) -> int:
     """Return how much a measured stream reported, when it can say.
 
     The provider hands in a wrapper that counts; anything else reports zero and
