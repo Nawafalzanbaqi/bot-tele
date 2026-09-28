@@ -56,10 +56,19 @@ class JournalEntry:
 
 
 class AcquisitionJournal(Protocol):
-    """Append-only record of completed acquisitions."""
+    """Append-only record of completed acquisitions, bounded by age."""
 
     async def record(self, entry: JournalEntry) -> None:
         """Append one entry."""
+        ...
+
+    async def prune(self, *, before: datetime) -> int:
+        """Forget entries delivered before ``before``; return how many went.
+
+        History exists so a person can find what they fetched last week, not
+        so the device keeps a row for every file it ever sent. Called at
+        start-up with the configured retention.
+        """
         ...
 
     async def recent(self, principal: str, *, limit: int = 10) -> Sequence[JournalEntry]:

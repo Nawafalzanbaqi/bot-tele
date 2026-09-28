@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
+    from datetime import datetime
 
     from mediahub.application.download.journal import JournalEntry
 
@@ -49,6 +50,22 @@ class InMemoryAcquisitionJournal:
             if not bucket:
                 return ()
             return tuple(reversed(list(bucket)[-limit:]))
+
+    async def prune(self, *, before: datetime) -> int:
+        """Forget entries delivered before ``before``."""
+        removed = 0
+        with self._lock:
+            for principal, bucket in list(self._entries.items()):
+                kept = deque(
+                    (entry for entry in bucket if entry.delivered_at >= before),
+                    maxlen=self._capacity,
+                )
+                removed += len(bucket) - len(kept)
+                if kept:
+                    self._entries[principal] = kept
+                else:
+                    del self._entries[principal]
+        return removed
 
     def clear(self) -> None:
         """Drop everything. Test helper; never called in production paths."""

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -414,6 +415,26 @@ class Container:
         if isinstance(self.database, SqliteDatabase):
             await self.database.create_schema()
             await self.database.verify_pragmas()
+        await self._prune_history()
+
+    async def _prune_history(self) -> None:
+        """Forget delivered-file history older than the configured retention.
+
+        Done at start-up rather than on a timer because the process restarts
+        weekly with the engine refresh anyway, and a bound that is applied
+        every few days is a bound. A failure here is logged, not fatal: stale
+        history is not a reason to refuse to start.
+        """
+        cutoff = self.clock.now() - timedelta(days=self.settings.database.journal_retention_days)
+        try:
+            removed = await self.journal.prune(before=cutoff)
+        except Exception:
+            logger.exception("Could not prune delivered-file history")
+            return
+        if removed:
+            logger.bind(removed=removed, older_than=cutoff.date().isoformat()).info(
+                "Pruned delivered-file history"
+            )
 
     async def check_database(self) -> bool:
         """Return whether the persistence backend answers.

@@ -140,6 +140,10 @@ class DatabaseSettings(_ConfigSection):
         max_overflow: Extra connections allowed under burst load.
         pool_timeout_seconds: How long to wait for a free connection.
         echo: Log every emitted statement. Debugging only - very noisy.
+        journal_retention_days: How long delivered-file history is kept.
+            Entries older than this are deleted when a process starts. The
+            table is otherwise unbounded: one row per file ever sent, forever,
+            on a device whose database is backed up nightly.
     """
 
     backend: PersistenceBackend = PersistenceBackend.SQLITE
@@ -153,6 +157,7 @@ class DatabaseSettings(_ConfigSection):
     max_overflow: int = Field(default=5, ge=0, le=100)
     pool_timeout_seconds: int = Field(default=30, ge=1, le=300)
     echo: bool = False
+    journal_retention_days: int = Field(default=90, ge=1, le=3650)
 
     @property
     def dsn(self) -> str:
