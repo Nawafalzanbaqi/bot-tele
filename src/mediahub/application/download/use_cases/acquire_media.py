@@ -27,6 +27,7 @@ from mediahub.application.download.ports import DownloadRequest
 from mediahub.application.download.quality import (
     AUTO_KEY,
     build_quality_options,
+    is_compatible_codec,
     resolve_auto,
     selection_for,
 )
@@ -50,6 +51,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         DownloadResult,
         MediaMetadata,
         ProgressCallback,
+        SelectedFormat,
     )
     from mediahub.application.workspace.ports import (
         ArtifactRef,
@@ -156,6 +158,7 @@ class AcquireMedia:
         ceiling = self._effective_ceiling(capabilities.maximum_file_size)
 
         chosen = self._choose(request.quality_key, options, ceiling=ceiling)
+        capped_from = self._capped_from(request.quality_key, options, chosen)
         selection = selection_for(
             chosen.key,
             options,
@@ -185,11 +188,12 @@ class AcquireMedia:
             )
 
             self._check_deliverable(result.primary, capabilities)
+            kind = self._kind_for(metadata, chosen, result.selected_format)
             receipt = await self._delivery.deliver(
                 DeliveryRequest(
                     target=request.target,
                     artifact=result.primary,
-                    kind=self._kind_for(metadata, chosen),
+                    kind=kind,
                     caption=request.caption or metadata.title,
                     filename=result.primary.name,
                     duration_seconds=_seconds(metadata),
@@ -225,11 +229,17 @@ class AcquireMedia:
 
         # The lease is gone: every local byte with it.
         elapsed = time.monotonic() - started
+        sent_as_document = (
+            kind is DeliveryKind.DOCUMENT and _KIND_MAP.get(metadata.kind) is DeliveryKind.VIDEO
+        )
         bound.bind(
             bytes=receipt.size_bytes,
             seconds=round(elapsed, 2),
             custodian=receipt.can_serve_back,
             egress="proxy" if result.via_proxy else "direct",
+            codec=result.selected_format.video_codec,
+            as_document=sent_as_document,
+            capped_from=capped_from,
         ).info("Acquired and delivered; local copy released")
 
         return AcquisitionSummary(
@@ -246,6 +256,8 @@ class AcquireMedia:
             local_copy_released=True,
             items_delivered=1 + extra,
             via_proxy=result.via_proxy,
+            capped_from=capped_from,
+            sent_as_document=sent_as_document,
         )
 
     @staticmethod
@@ -337,11 +349,49 @@ class AcquireMedia:
             )
 
     @staticmethod
-    def _kind_for(metadata: MediaMetadata, chosen: QualityOption) -> DeliveryKind:
-        """Decide how the destination should present the result."""
+    def _capped_from(
+        key: str, options: Sequence[QualityOption], chosen: QualityOption
+    ) -> str | None:
+        """Return the label of the best rung when the ceiling forced a lower one.
+
+        Only ``auto`` can be capped: a person who tapped 480p got 480p. And only
+        a *rung* counts as the thing skipped - the unbounded "best" entry has no
+        size of its own, so there is nothing to say it would not have fitted.
+        """
+        if key != AUTO_KEY:
+            return None
+        rungs = [option for option in options if option.height is not None]
+        if not rungs:
+            return None
+        best = rungs[0]
+        if chosen.is_audio_only:
+            return best.label
+        if chosen.height is not None and best.height is not None and chosen.height < best.height:
+            return best.label
+        return None
+
+    @staticmethod
+    def _kind_for(
+        metadata: MediaMetadata, chosen: QualityOption, taken: SelectedFormat
+    ) -> DeliveryKind:
+        """Decide how the destination should present the result.
+
+        A video whose codec the destination cannot play inline goes as a
+        document. Sent as a video it would arrive, show a poster, and refuse to
+        play - with nothing to say why. As a document the player the person
+        already has opens it. An *unknown* codec is not a known-bad one and is
+        still sent as video.
+        """
         if chosen.is_audio_only:
             return DeliveryKind.AUDIO
-        return _KIND_MAP.get(metadata.kind, DeliveryKind.DOCUMENT)
+        kind = _KIND_MAP.get(metadata.kind, DeliveryKind.DOCUMENT)
+        if (
+            kind is DeliveryKind.VIDEO
+            and taken.video_codec is not None
+            and not is_compatible_codec(taken.video_codec)
+        ):
+            return DeliveryKind.DOCUMENT
+        return kind
 
     @staticmethod
     def _reservation(metadata: MediaMetadata) -> int:

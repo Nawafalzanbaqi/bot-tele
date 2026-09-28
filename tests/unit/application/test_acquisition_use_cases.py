@@ -21,6 +21,7 @@ from mediahub.application.delivery.ports import (
 )
 from mediahub.application.download.dto import (
     AcquireMediaCommand,
+    AcquisitionSummary,
     GetHistoryQuery,
     ProbeSourceQuery,
 )
@@ -320,6 +321,161 @@ class TestAcquireMedia:
             )
 
         assert list((tmp_path / "ws").iterdir()) == []
+
+
+class TestDeliveryPolicy:
+    """What the destination is told the file *is*, and what the person is told.
+
+    A file that arrives and does not play is the worst outcome, because nothing
+    reports that anything went wrong. So a video in a codec the chat client
+    cannot decode is sent as a document, and a rung skipped for size is named.
+    """
+
+    def _use_case(
+        self,
+        tmp_path: Path,
+        *,
+        delivery: FakeDeliveryProvider,
+        taken: dict[str, object],
+    ) -> AcquireMedia:
+        return AcquireMedia(
+            downloader=engine(
+                info=video_info(requested_downloads=[taken]),
+                script=download_script(size_bytes=4096),  # type: ignore[arg-type]
+            ),
+            delivery=router_over(delivery),
+            workspace=FilesystemWorkspace(tmp_path / "ws"),
+            journal=InMemoryAcquisitionJournal(),
+            clock=FrozenClock(),
+            max_item_bytes=100 * 1024 * 1024,
+        )
+
+    async def _run(self, use_case: AcquireMedia, key: str) -> AcquisitionSummary:
+        return await use_case.execute(
+            AcquireMediaCommand(
+                url=URL, quality_key=key, target=target(), requested_by="telegram:1"
+            )
+        )
+
+    async def test_h264_goes_as_an_inline_video(self, tmp_path: Path) -> None:
+        delivery = FakeDeliveryProvider()
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "137", "ext": "mp4", "vcodec": "avc1.640028", "acodec": "mp4a"},
+        )
+
+        summary = await self._run(use_case, "best")
+
+        assert delivery.delivered[0].kind is DeliveryKind.VIDEO
+        assert summary.sent_as_document is False
+
+    async def test_hevc_goes_as_an_inline_video(self, tmp_path: Path) -> None:
+        delivery = FakeDeliveryProvider()
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "x", "ext": "mp4", "vcodec": "hvc1.1.6.L93.B0", "acodec": "mp4a"},
+        )
+
+        await self._run(use_case, "best")
+
+        assert delivery.delivered[0].kind is DeliveryKind.VIDEO
+
+    @pytest.mark.parametrize("codec", ["vp09.00.40.08", "av01.0.08M.08"])
+    async def test_vp9_or_av1_goes_as_a_document_and_says_so(
+        self, tmp_path: Path, codec: str
+    ) -> None:
+        delivery = FakeDeliveryProvider()
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "313", "ext": "webm", "vcodec": codec, "acodec": "opus"},
+        )
+
+        summary = await self._run(use_case, "best")
+
+        assert delivery.delivered[0].kind is DeliveryKind.DOCUMENT
+        assert summary.sent_as_document is True
+
+    async def test_an_unknown_codec_is_still_sent_as_video(self, tmp_path: Path) -> None:
+        """Unknown is not known-bad; refusing to play inline needs evidence."""
+        delivery = FakeDeliveryProvider()
+        use_case = self._use_case(
+            tmp_path, delivery=delivery, taken={"format_id": "18", "ext": "mp4"}
+        )
+
+        summary = await self._run(use_case, "best")
+
+        assert delivery.delivered[0].kind is DeliveryKind.VIDEO
+        assert summary.sent_as_document is False
+
+    async def test_audio_is_audio_whatever_the_codec_says(self, tmp_path: Path) -> None:
+        delivery = FakeDeliveryProvider()
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "251", "ext": "webm", "vcodec": "none", "acodec": "opus"},
+        )
+
+        summary = await self._run(use_case, "audio")
+
+        assert delivery.delivered[0].kind is DeliveryKind.AUDIO
+        assert summary.sent_as_document is False
+
+    async def test_auto_names_the_rung_it_skipped_for_size(self, tmp_path: Path) -> None:
+        """The source offers 1080p at ~60 MB and 360p at 11 MB; the ceiling is 20 MB."""
+        delivery = FakeDeliveryProvider(maximum_file_size=20_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "18", "ext": "mp4", "vcodec": "avc1.42001E", "acodec": "mp4a"},
+        )
+
+        summary = await self._run(use_case, "auto")
+
+        assert summary.quality_label == "360p"
+        assert summary.capped_from == "1080p"
+
+    async def test_auto_that_fits_at_the_top_is_not_called_capped(self, tmp_path: Path) -> None:
+        delivery = FakeDeliveryProvider(maximum_file_size=100_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "137", "ext": "mp4", "vcodec": "avc1.640028", "acodec": "mp4a"},
+        )
+
+        summary = await self._run(use_case, "auto")
+
+        assert summary.quality_label == "1080p"
+        assert summary.capped_from is None
+
+    async def test_a_rung_the_person_chose_is_never_called_capped(self, tmp_path: Path) -> None:
+        delivery = FakeDeliveryProvider(maximum_file_size=20_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "18", "ext": "mp4", "vcodec": "avc1.42001E", "acodec": "mp4a"},
+        )
+
+        summary = await self._run(use_case, "h360")
+
+        assert summary.capped_from is None
+
+    async def test_auto_falling_to_audio_names_the_best_rung(self, tmp_path: Path) -> None:
+        """Every video rung is too large; sound is delivered and the skip is named."""
+        delivery = FakeDeliveryProvider(maximum_file_size=5_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a"},
+        )
+
+        summary = await self._run(use_case, "auto")
+
+        assert summary.quality_label == "Audio only"
+        assert summary.capped_from == "1080p"
+        assert delivery.delivered[0].kind is DeliveryKind.AUDIO
 
 
 class TestHistoryAndCapabilities:

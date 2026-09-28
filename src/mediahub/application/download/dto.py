@@ -269,6 +269,10 @@ class AcquisitionSummary:
     items_delivered: int = 1
     via_proxy: bool = False
     """Whether the fetch went through the egress proxy rather than the direct path."""
+    capped_from: str | None = None
+    """Label of the better rung that was skipped because it would not fit the destination."""
+    sent_as_document: bool = False
+    """Whether a video went as a file because its codec does not play inline."""
 
 
 # --------------------------------------------------------------------------- #

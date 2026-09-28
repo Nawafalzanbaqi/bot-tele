@@ -334,6 +334,49 @@ class TestFormatters:
         assert "تم الإرسال" in text
         assert "720p" in text
         assert "42ث" in text
+        # The extra lines are said only when they happened.
+        assert "بدل" not in text
+        assert "كملف" not in text
+        assert "نفق" not in text
+
+    def _delivered(self, **overrides: object) -> AcquisitionSummary:
+        base: dict[str, object] = {
+            "url": "https://example.com/a",
+            "provider": "testsite",
+            "title": "A Test Video",
+            "quality_label": "720p",
+            "bytes_delivered": 5_000_000,
+            "elapsed_seconds": 42.0,
+            "remote_id": "R",
+            "delivered_at": NOW,
+        }
+        base.update(overrides)
+        return AcquisitionSummary(**base)  # type: ignore[arg-type]
+
+    def test_says_when_a_better_rung_was_skipped_for_size(self) -> None:
+        text = formatters.render_delivered(self._delivered(capped_from="1080p"))
+
+        assert "720p بدل 1080p" in text
+
+    def test_says_when_the_video_went_as_a_file(self) -> None:
+        text = formatters.render_delivered(self._delivered(sent_as_document=True))
+
+        assert "أُرسل كملف" in text
+        assert "VP9/AV1" in text
+
+    def test_says_when_the_proxy_was_used(self) -> None:
+        text = formatters.render_delivered(self._delivered(via_proxy=True))
+
+        assert "نفق الخروج" in text
+
+    def test_delivery_confirmation_has_no_markdown(self) -> None:
+        text = formatters.render_delivered(
+            self._delivered(capped_from="1080p", sent_as_document=True, via_proxy=True)
+        )
+
+        assert "*" not in text
+        assert "_" not in text
+        assert "`" not in text
 
     def test_renders_empty_history(self) -> None:
         assert "لم تحمّل شيئًا" in formatters.render_history(())

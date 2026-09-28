@@ -328,10 +328,23 @@ def _representative(candidates: Sequence[VideoFormat], *, prefer_compatible: boo
     return max(sized, key=lambda video: video.filesize_bytes or 0)
 
 
+COMPATIBLE_VIDEO_CODECS: Final[tuple[str, ...]] = ("avc1", "h264", "hvc1", "hev1", "hevc", "h265")
+"""Codec prefixes a chat client plays inline: H.264 first, H.265 close behind.
+
+VP9 and AV1 are deliberately absent. They are smaller at the same resolution and
+most phone players and chat clients cannot decode them; a file in one of them is
+delivered as a document rather than an inline video, and the user is told why.
+"""
+
+
+def is_compatible_codec(codec: str | None) -> bool:
+    """Return whether a video codec name is one an ordinary player decodes."""
+    return (codec or "").lower().startswith(COMPATIBLE_VIDEO_CODECS)
+
+
 def _is_compatible(video: VideoFormat) -> bool:
     """Return whether an ordinary player can be expected to decode this."""
-    codec = (video.video_codec or "").lower()
-    return codec.startswith(("avc1", "h264"))
+    return is_compatible_codec(video.video_codec)
 
 
 def _merge_audio_bytes(metadata: MediaMetadata) -> int:

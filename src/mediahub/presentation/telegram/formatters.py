@@ -267,6 +267,13 @@ def render_delivered(summary: AcquisitionSummary) -> str:
         f"✅ تم الإرسال · {summary.quality_label} · "
         f"{_bytes(summary.bytes_delivered)} · {_duration(summary.elapsed_seconds)}",
     ]
+    if summary.capped_from:
+        lines.append(
+            f"⬇️ أُخذت {summary.quality_label} بدل {summary.capped_from} لأن الأعلى أكبر "
+            "من الحدّ الذي يقبله تلجرام هنا."
+        )
+    if summary.sent_as_document:
+        lines.append("📎 أُرسل كملف لأن ترميزه (VP9/AV1) لا يُعرض داخل تلجرام؛ افتحه بمشغّل خارجي.")
     if summary.via_proxy:
         # Said only when it happened: the direct path is the normal one, and a
         # line about the route on every message would stop being read.

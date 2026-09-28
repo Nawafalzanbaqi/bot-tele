@@ -76,6 +76,14 @@ def _best_single(selection: FormatSelection) -> str:
 COMPATIBLE_VIDEO: Final[str] = "[vcodec^=avc1]"
 """H.264. Decoded in hardware by every phone, browser and chat client."""
 
+COMPATIBLE_VIDEO_HEVC: Final[tuple[str, ...]] = ("[vcodec^=hvc1]", "[vcodec^=hev1]")
+"""H.265 in its two MP4 signalling flavours.
+
+Second choice, not first: Telegram's clients play it inline on every phone made
+in the last decade and it is smaller than H.264 at the same resolution, but a
+few desktop clients still hand it to a system decoder that may be missing.
+"""
+
 COMPATIBLE_AUDIO: Final[str] = "[acodec^=mp4a]"
 """AAC. The audio half of the same bargain."""
 
@@ -83,23 +91,28 @@ COMPATIBLE_AUDIO: Final[str] = "[acodec^=mp4a]"
 def _merged(selection: FormatSelection) -> str:
     """Return an expression for separate video and audio streams.
 
-    When compatibility is asked for, H.264 + AAC is tried **first** and any
-    codec second. That ordering is the whole point: the streams a platform
-    considers best are increasingly AV1 or VP9 with Opus, which are smaller for
-    the same resolution and which most players cannot decode. Taking them
-    produces a file that is the right resolution, arrives intact, and does not
-    play - the least useful of all possible outcomes, because nothing reports
-    that anything went wrong.
+    When compatibility is asked for, H.264 + AAC is tried **first**, H.265 + AAC
+    second, and any codec last. That ordering is the whole point: the streams a
+    platform considers best are increasingly AV1 or VP9 with Opus, which are
+    smaller for the same resolution and which most players cannot decode.
+    Taking them produces a file that is the right resolution, arrives intact,
+    and does not play - the least useful of all possible outcomes, because
+    nothing reports that anything went wrong. (When only those exist, the
+    acquisition sends the result as a document rather than an inline video, and
+    says so.)
 
-    The pair is also what makes the result muxable into MP4 without re-encoding,
-    which on a small device is the difference between seconds and minutes.
+    The H.264/H.265 + AAC pairs are also what make the result muxable into MP4
+    without re-encoding, which on a small device is the difference between
+    seconds and minutes.
     """
     constraints = _constraints(selection, include_container=False)
     fallback = f"bv*{constraints}+ba"
     if not selection.prefer_compatible:
         return fallback
-    preferred = f"bv*{COMPATIBLE_VIDEO}{constraints}+ba{COMPATIBLE_AUDIO}"
-    return f"{preferred}/{fallback}"
+    tiers = [f"bv*{COMPATIBLE_VIDEO}{constraints}+ba{COMPATIBLE_AUDIO}"]
+    tiers.extend(f"bv*{hevc}{constraints}+ba{COMPATIBLE_AUDIO}" for hevc in COMPATIBLE_VIDEO_HEVC)
+    tiers.append(fallback)
+    return "/".join(tiers)
 
 
 def _audio_only(selection: FormatSelection) -> str:

@@ -356,6 +356,20 @@ class TestPlayableOutput:
         assert "/bv*[height<=1080]+ba" in expression
         assert expression.endswith("/b")
 
+    def test_hevc_is_the_second_choice_before_anything_goes(self) -> None:
+        """H.265 plays inline too, and is smaller; VP9/AV1 come only when nothing else exists."""
+        expression = build_format_expression(
+            FormatSelection.up_to_height(1080, allow_merge=True, prefer_compatible=True)
+        )
+        tiers = expression.split("/")
+
+        assert tiers[0].startswith("bv*[vcodec^=avc1]")
+        assert tiers[1] == "bv*[vcodec^=hvc1][height<=1080]+ba[acodec^=mp4a]"
+        assert tiers[2] == "bv*[vcodec^=hev1][height<=1080]+ba[acodec^=mp4a]"
+        assert tiers[3] == "bv*[height<=1080]+ba"
+        assert "vp9" not in expression
+        assert "av01" not in expression
+
     def test_compatibility_is_opt_in(self) -> None:
         """A destination that plays anything should not pay for the preference."""
         expression = build_format_expression(FormatSelection.up_to_height(1080, allow_merge=True))

@@ -19,6 +19,7 @@ from mediahub.application.download.quality import (
     MAX_OPTIONS,
     ORIGINAL_KEY,
     build_quality_options,
+    is_compatible_codec,
     resolve_auto,
     selection_for,
 )
@@ -297,6 +298,38 @@ class TestSizesAreDeliveredSizes:
         )
 
         assert [o.key for o in options if o.height] == ["h1080", "h720", "h360"]
+
+
+class TestCompatibleCodecs:
+    """What plays inline in a chat client, and what is handed over as a file."""
+
+    @pytest.mark.parametrize(
+        "codec",
+        ["avc1.640028", "h264", "hvc1.1.6.L93.B0", "hev1.1.6.L120.90", "hevc", "H265", "AVC1"],
+    )
+    def test_h264_and_h265_play_inline(self, codec: str) -> None:
+        assert is_compatible_codec(codec) is True
+
+    @pytest.mark.parametrize("codec", ["vp09.00.40.08", "vp9", "av01.0.08M.08", "av1", "theora"])
+    def test_vp9_and_av1_do_not(self, codec: str) -> None:
+        assert is_compatible_codec(codec) is False
+
+    def test_an_unknown_codec_is_not_called_compatible(self) -> None:
+        """The caller decides what to do with "unknown"; this only answers "known good"."""
+        assert is_compatible_codec(None) is False
+        assert is_compatible_codec("") is False
+
+    def test_the_hevc_rung_is_the_size_shown_when_no_h264_exists(self) -> None:
+        av1 = VideoFormat(
+            format_id="399", height=1080, video_codec="av01.0.08M.08", filesize_bytes=20_000_000
+        )
+        hevc = VideoFormat(
+            format_id="hev", height=1080, video_codec="hvc1.1.6.L93", filesize_bytes=28_000_000
+        )
+
+        options = build_quality_options(metadata(video_formats=(av1, hevc)), prefer_compatible=True)
+
+        assert next(o for o in options if o.key == "h1080").approx_bytes == 28_000_000
 
 
 class TestResolveAuto:
