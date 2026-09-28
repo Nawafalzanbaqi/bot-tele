@@ -18,6 +18,7 @@ from mediahub.application.download.dto import (
     HistoryEntrySummary,
     QualityOption,
     SourceSummary,
+    StageTimings,
 )
 from mediahub.application.download.ports import DownloadProgress, DownloadStage
 from mediahub.domain.media.enums import MediaType
@@ -383,9 +384,25 @@ class TestFormatters:
 
         assert "نفق الخروج" in text
 
+    def test_says_where_the_time_went(self) -> None:
+        text = formatters.render_delivered(
+            self._delivered(
+                stages=StageTimings(probe_seconds=2.0, download_seconds=41.0, deliver_seconds=12.0)
+            )
+        )
+
+        assert "قراءة 2ث" in text
+        assert "تحميل 41ث" in text
+        assert "رفع 12ث" in text
+
     def test_delivery_confirmation_has_no_markdown(self) -> None:
         text = formatters.render_delivered(
-            self._delivered(capped_from="1080p", sent_as_document=True, via_proxy=True)
+            self._delivered(
+                capped_from="1080p",
+                sent_as_document=True,
+                via_proxy=True,
+                stages=StageTimings(probe_seconds=2.0, download_seconds=41.0, deliver_seconds=12.0),
+            )
         )
 
         assert "*" not in text

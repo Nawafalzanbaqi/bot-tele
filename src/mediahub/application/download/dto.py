@@ -236,6 +236,30 @@ class AcquireMediaCommand(Command):
 
 
 @dataclass(frozen=True, slots=True)
+class StageTimings:
+    """How the wall-clock time of one acquisition was spent.
+
+    Three numbers, because they point at three different things: a slow probe
+    is the source (or a tunnel), a slow download is bandwidth or the engine, a
+    slow delivery is the destination. One total hides which of them it was.
+
+    Attributes:
+        probe_seconds: Resolving the link to a description.
+        download_seconds: Fetching the bytes, including any merge.
+        deliver_seconds: Uploading the result and any companions.
+    """
+
+    probe_seconds: float
+    download_seconds: float
+    deliver_seconds: float
+
+    @property
+    def total_seconds(self) -> float:
+        """Return the sum of the three stages."""
+        return self.probe_seconds + self.download_seconds + self.deliver_seconds
+
+
+@dataclass(frozen=True, slots=True)
 class AcquisitionSummary:
     """What happened, once the bytes are somewhere else and gone from here.
 
@@ -277,6 +301,8 @@ class AcquisitionSummary:
     """Label of the better rung that was skipped because it would not fit the destination."""
     sent_as_document: bool = False
     """Whether a video went as a file because its codec does not play inline."""
+    stages: StageTimings | None = None
+    """Where the time went, when the use case measured it."""
 
 
 # --------------------------------------------------------------------------- #

@@ -257,6 +257,25 @@ class TestAcquireMedia:
         # The whole point: nothing is left on disk.
         assert list((tmp_path / "ws").iterdir()) == []
 
+    async def test_reports_where_the_time_went(self, tmp_path: Path) -> None:
+        """Three stages, each non-negative, together no more than the whole."""
+        use_case = self._use_case(
+            tmp_path, delivery=FakeDeliveryProvider(), journal=InMemoryAcquisitionJournal()
+        )
+
+        summary = await use_case.execute(
+            AcquireMediaCommand(
+                url=URL, quality_key="best", target=target(), requested_by="telegram:1"
+            )
+        )
+
+        stages = summary.stages
+        assert stages is not None
+        assert stages.probe_seconds >= 0
+        assert stages.download_seconds >= 0
+        assert stages.deliver_seconds >= 0
+        assert stages.total_seconds <= summary.elapsed_seconds + 1e-6
+
     async def test_records_history(self, tmp_path: Path) -> None:
         journal = InMemoryAcquisitionJournal()
         use_case = self._use_case(tmp_path, delivery=FakeDeliveryProvider(), journal=journal)

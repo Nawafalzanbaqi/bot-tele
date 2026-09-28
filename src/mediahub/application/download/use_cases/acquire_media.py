@@ -20,7 +20,7 @@ from loguru import logger
 
 from mediahub.application.delivery.errors import ArtifactTooLargeError, DeliveryError
 from mediahub.application.delivery.ports import DeliveryKind, DeliveryRequest
-from mediahub.application.download.dto import AcquisitionSummary
+from mediahub.application.download.dto import AcquisitionSummary, StageTimings
 from mediahub.application.download.errors import FormatUnavailableError
 from mediahub.application.download.journal import JournalEntry
 from mediahub.application.download.ports import DownloadRequest
@@ -145,6 +145,7 @@ class AcquireMedia:
         # Re-probe rather than trusting metadata the caller gathered earlier:
         # format identifiers expire, and a stale one downloads the wrong thing.
         metadata = await self._downloader.probe(request.url)
+        probed_at = time.monotonic()
         options = build_quality_options(
             metadata,
             max_bytes=self._max_item_bytes,
@@ -175,6 +176,7 @@ class AcquireMedia:
         with self._workspace.lease(
             label="acquire", reserve_bytes=self._reservation(metadata)
         ) as scope:
+            download_started = time.monotonic()
             result = await self._downloader.fetch(
                 DownloadRequest(
                     url=request.url,
@@ -186,6 +188,7 @@ class AcquireMedia:
                 on_progress=on_progress,
                 cancellation=cancellation,
             )
+            downloaded_at = time.monotonic()
 
             self._check_deliverable(result.primary, capabilities)
             kind = self._kind_for(metadata, chosen, result.selected_format)
@@ -211,6 +214,7 @@ class AcquireMedia:
             extra = await self._deliver_companions(
                 result, request=request, capabilities=capabilities, scope=scope
             )
+            delivered_at = time.monotonic()
 
             await self._journal.record(
                 JournalEntry(
@@ -229,12 +233,20 @@ class AcquireMedia:
 
         # The lease is gone: every local byte with it.
         elapsed = time.monotonic() - started
+        stages = StageTimings(
+            probe_seconds=probed_at - started,
+            download_seconds=downloaded_at - download_started,
+            deliver_seconds=delivered_at - downloaded_at,
+        )
         sent_as_document = (
             kind is DeliveryKind.DOCUMENT and _KIND_MAP.get(metadata.kind) is DeliveryKind.VIDEO
         )
         bound.bind(
             bytes=receipt.size_bytes,
             seconds=round(elapsed, 2),
+            probe_s=round(stages.probe_seconds, 2),
+            download_s=round(stages.download_seconds, 2),
+            deliver_s=round(stages.deliver_seconds, 2),
             custodian=receipt.can_serve_back,
             egress="proxy" if result.via_proxy else "direct",
             codec=result.selected_format.video_codec,
@@ -258,6 +270,7 @@ class AcquireMedia:
             via_proxy=result.via_proxy,
             capped_from=capped_from,
             sent_as_document=sent_as_document,
+            stages=stages,
         )
 
     @staticmethod

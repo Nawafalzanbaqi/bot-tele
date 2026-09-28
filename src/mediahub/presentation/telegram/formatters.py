@@ -288,6 +288,14 @@ def render_delivered(summary: AcquisitionSummary) -> str:
         # Said only when it happened: the direct path is the normal one, and a
         # line about the route on every message would stop being read.
         lines.append("🛡 جُلب عبر نفق الخروج بعد أن رُفض المسار المباشر.")
+    if summary.stages is not None:
+        # Three numbers rather than one, because they blame three different
+        # things: the source, the connection, the destination.
+        stages = summary.stages
+        lines.append(
+            f"⏱ قراءة {_duration(stages.probe_seconds)} · تحميل "
+            f"{_duration(stages.download_seconds)} · رفع {_duration(stages.deliver_seconds)}"
+        )
     lines.append("🗑 حُذفت النسخة من الجهاز.")
     return "\n".join(lines)
 
