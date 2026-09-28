@@ -19,8 +19,11 @@ ARG PYTHON_VERSION=3.13
 # updates itself at runtime.
 ARG YTDLP_VERSION=2026.9.27.232945.dev0
 ARG GALLERYDL_VERSION=1.32.14
-# yt-dlp >= 2025.11 needs a JavaScript runtime for YouTube's signature/n-challenge scripts.
-# Without one every YouTube download silently caps at 240p (measured on this Pi, 2026-09-28).
+# yt-dlp >= 2025.11 wants a JavaScript runtime for YouTube's signature/n-challenge scripts
+# and warns that extraction without one "has been deprecated, and some formats may be
+# missing". Measured on this Pi on 2026-09-28 the format list of a 1080p video was still
+# complete without it, so this is insurance against the deprecation landing, not a fix for
+# a live regression. Pinned like everything else.
 ARG DENO_VERSION=v2.9.7
 
 # --------------------------------------------------------------------------- #
