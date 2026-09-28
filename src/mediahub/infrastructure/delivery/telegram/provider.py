@@ -52,7 +52,11 @@ from mediahub.application.delivery.ports import (
 )
 from mediahub.domain.common.fingerprint import Fingerprint, HashAlgorithm
 from mediahub.infrastructure.delivery.shared.measured_reader import MeasuredReader
-from mediahub.infrastructure.delivery.telegram.errors import PROVIDER, classify
+from mediahub.infrastructure.delivery.telegram.errors import (
+    PROVIDER,
+    classify,
+    is_safe_to_retry,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.delivery.ports import (
@@ -79,10 +83,20 @@ test asserts that a target built there is one this provider accepts.
 BOT_API_MAX_BYTES: Final[int] = 50 * 1024 * 1024
 """What the public Bot API accepts for an upload."""
 
-LOCAL_API_MAX_BYTES: Final[int] = 2 * 1024 * 1024 * 1024
-"""What a self-hosted Bot API server accepts."""
+LOCAL_API_MAX_BYTES: Final[int] = 2000 * 1024 * 1024
+"""What a self-hosted Bot API server accepts: 2000 MiB, not 2 GiB.
+
+The 48 MiB between the two is the difference between a file that is uploaded and
+one that is downloaded in full, hashed, handed over and then refused.
+"""
 
 MAX_CAPTION_LENGTH: Final[int] = 1024
+
+RETRY_DELAY_SECONDS: Final[float] = 2.0
+"""Pause before the single retry of a delivery that never reached the destination."""
+
+MAX_RETRY_DELAY_SECONDS: Final[float] = 30.0
+"""Longest pause honoured when the destination itself names a retry delay."""
 
 MAX_THUMBNAIL_BYTES: Final[int] = 200 * 1024
 """What Telegram accepts as a poster image, alongside "JPEG, and nothing else"."""
@@ -299,24 +313,58 @@ class TelegramDeliveryProvider:
         *,
         local_path: Path | None = None,
     ) -> UploadedMedia:
-        """Perform the upload, translating any failure on the way out."""
+        """Perform the upload, translating any failure on the way out.
+
+        One retry, and only when two things are both true: the file is handed
+        over **by path** (so re-sending costs one small request and nothing has
+        to be rewound), and the failure is one that provably happened before
+        the destination took the request - a refused connection, an unreachable
+        network, a failed name lookup, or an explicit "retry after". A timeout
+        is deliberately *not* retried: the local server may already be pushing
+        the file to Telegram, and a second send would deliver it twice.
+
+        Without this, a network blip at the last step discarded a download that
+        had taken minutes, because the lease is released on any failure.
+        """
         try:
-            return await self._uploader.send_media(
-                chat_id=chat,
-                content=reader,
-                local_path=local_path,
-                kind=request.kind.value,
-                caption=_truncate(request.caption),
-                filename=request.filename or request.artifact.name,
-                duration_seconds=request.duration_seconds,
-                width=request.width,
-                height=request.height,
-                thumbnail=thumbnail,
-            )
+            return await self._send(request, chat, reader, thumbnail, local_path)
         except Exception as exc:
             # The detail deliberately omits the path, the token and the
             # destination's own text: a delivery error is shown to a person.
-            raise classify(exc, detail=request.kind.value) from exc
+            error = classify(exc, detail=request.kind.value)
+            if local_path is None or not is_safe_to_retry(error, exc):
+                raise error from exc
+            delay = min(error.retry_after_seconds or RETRY_DELAY_SECONDS, MAX_RETRY_DELAY_SECONDS)
+            logger.bind(provider=PROVIDER, code=error.code, delay=delay).warning(
+                "Delivery failed before the destination took the file; retrying once"
+            )
+            await asyncio.sleep(delay)
+            try:
+                return await self._send(request, chat, reader, thumbnail, local_path)
+            except Exception as again:
+                raise classify(again, detail=request.kind.value) from again
+
+    async def _send(
+        self,
+        request: DeliveryRequest,
+        chat: str,
+        reader: Any,
+        thumbnail: Path | None,
+        local_path: Path | None,
+    ) -> UploadedMedia:
+        """One attempt at the upload."""
+        return await self._uploader.send_media(
+            chat_id=chat,
+            content=reader,
+            local_path=local_path,
+            kind=request.kind.value,
+            caption=_truncate(request.caption),
+            filename=request.filename or request.artifact.name,
+            duration_seconds=request.duration_seconds,
+            width=request.width,
+            height=request.height,
+            thumbnail=thumbnail,
+        )
 
     @staticmethod
     def _poster(request: DeliveryRequest, workspace: WorkspaceScope) -> Path | None:

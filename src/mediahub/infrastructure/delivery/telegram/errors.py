@@ -78,6 +78,9 @@ _UNAVAILABLE_MARKERS: Final[tuple[str, ...]] = (
     "connection aborted",
     "connection refused",
     "network is unreachable",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "connecterror",
 )
 
 # Status codes are matched as whole tokens, never as substrings. A bare "413"
@@ -188,6 +191,36 @@ _RULES: Final[tuple[_Rule, ...]] = (
         ProviderUnavailableError,
     ),
 )
+
+
+_NEVER_REACHED_MARKERS: Final[tuple[str, ...]] = (
+    "connection refused",
+    "network is unreachable",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "connecterror",
+    "failed to establish a new connection",
+)
+"""Failures that happen before a request is sent, so a retry cannot duplicate anything.
+
+A timeout is conspicuously absent: the request may have been accepted and the
+destination may be working on it, and re-sending would deliver the file twice.
+"""
+
+
+def is_safe_to_retry(error: DeliveryError, exc: BaseException) -> bool:
+    """Return whether one retry of this failed upload cannot produce a duplicate.
+
+    True for an explicit rate limit (the destination rejected the request and
+    said when to come back) and for connection-level failures that occur before
+    anything is sent. Everything else is either final or ambiguous.
+    """
+    if isinstance(error, DeliveryRateLimitedError):
+        return True
+    if isinstance(error, ProviderUnavailableError):
+        text = _chain_text(exc)
+        return any(marker in text for marker in _NEVER_REACHED_MARKERS)
+    return False
 
 
 def _status_codes(text: str) -> frozenset[str]:
