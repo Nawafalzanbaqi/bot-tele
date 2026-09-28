@@ -119,6 +119,7 @@ class TestShutdown:
         match = re.search(r"stop_grace_period:\s*(\d+)s", compose)
 
         assert match is not None, "the telegram service must declare stop_grace_period"
-        assert DRAIN_TIMEOUT_SECONDS < int(match.group(1))
+        grace_seconds = int(match.group(1))
+        assert grace_seconds > DRAIN_TIMEOUT_SECONDS
         # Anything shorter abandons real downloads for no reason.
         assert DRAIN_TIMEOUT_SECONDS >= 45

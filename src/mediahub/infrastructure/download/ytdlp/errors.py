@@ -107,7 +107,8 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "your ip address is blocked",
             "confirm you are not a robot",
             "confirm you're not a bot",
-            "confirm you’re not a bot",
+            # YouTube's own wording uses the typographic apostrophe.
+            "confirm you’re not a bot",  # noqa: RUF001
         ),
         AuthenticationRequiredError,
     ),

@@ -264,7 +264,7 @@ class TestErrorClassification:
             # Throttling, not a login wall. This phrase used to be classified
             # as a permanent authentication failure and was never retried.
             ("Please wait a few minutes before you try again.", RateLimitedError),
-            ("Sign in to confirm you’re not a bot", AuthenticationRequiredError),
+            ("Sign in to confirm you’re not a bot", AuthenticationRequiredError),  # noqa: RUF001
             ("HTTP Error 503: Service Unavailable", ProviderError),
             ("The read operation timed out", ProviderError),
             ("[Errno 104] Connection reset by peer", ConnectionBlockedError),
@@ -280,7 +280,7 @@ class TestErrorClassification:
         assert error.kind is FailureKind.TRANSIENT, "unknown must never mean permanent"
 
     def test_a_bare_404_inside_a_number_is_not_content_removed(self) -> None:
-        """"404" was a substring match: a byte count could bury a real link."""
+        """A bare "404" was a substring match: a byte count could bury a real link."""
         error = classify(Exception("Downloaded 404096 bytes before the stream stalled"), url="u")
 
         assert not isinstance(error, ContentRemovedError)

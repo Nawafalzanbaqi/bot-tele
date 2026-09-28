@@ -335,7 +335,8 @@ class TestCancelCommand:
     async def test_cancel_stops_the_callers_running_acquisition(
         self, messenger: FakeMessenger
     ) -> None:
-        acquire = FakeAcquire(hold=True)
+        acquire = FakeAcquire()
+        acquire.hold = True
         handlers, _ = build(messenger, acquire=acquire, auto=True)
 
         await handle(handlers, message_update(URL))
@@ -353,7 +354,8 @@ class TestCancelCommand:
     async def test_cancel_never_reaches_another_users_download(
         self, messenger: FakeMessenger
     ) -> None:
-        acquire = FakeAcquire(hold=True)
+        acquire = FakeAcquire()
+        acquire.hold = True
         handlers, _ = build(messenger, acquire=acquire, auto=True)
 
         await handle(handlers, message_update(URL, user_id=4242, chat_id=4242))
@@ -569,16 +571,16 @@ class TestButtons:
 
 
 class TestAuthorisation:
-    async def test_a_denied_sender_gets_one_refusal_and_nothing_else(
-        self, messenger: FakeMessenger
-    ) -> None:
+    async def test_a_denied_sender_gets_nothing_at_all(self, messenger: FakeMessenger) -> None:
+        """Not a refusal: a reply confirms a bot answers here. The audit log has the denial."""
         probe = FakeProbe()
         handlers, _ = build(messenger, authorize=FakeAuthorize(allowed=False), probe=probe)
 
         await handle(handlers, message_update(URL))
 
         assert probe.calls == [], "a denied sender must not reach any use case"
-        assert "غير مصرّح" in messenger.last_text
+        assert messenger.sent == []
+        assert messenger.edits == []
 
     async def test_every_intent_is_authorised(self, messenger: FakeMessenger) -> None:
         authorize = FakeAuthorize()

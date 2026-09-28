@@ -130,6 +130,12 @@ def test_other_credentials_are_redacted(text: str, secret: str) -> None:
     assert secret not in redact(text)
 
 
+def _fail_like_a_poll_does() -> None:
+    """Raise the shape of error a failed Bot API call produces: URL, token and all."""
+    message = f"POST https://api.telegram.org/bot{BOT_TOKEN}/getUpdates failed"
+    raise ConnectionError(message)
+
+
 class TestTracebacks:
     """An exception is rendered by the sink *after* the patcher has run.
 
@@ -153,8 +159,7 @@ class TestTracebacks:
             )
         )
         try:
-            message = f"POST https://api.telegram.org/bot{BOT_TOKEN}/getUpdates failed"
-            raise ConnectionError(message)
+            _fail_like_a_poll_does()
         except ConnectionError:
             logger.opt(exception=True).error("Polling failed; backing off")
 
