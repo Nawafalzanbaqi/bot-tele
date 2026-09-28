@@ -106,7 +106,10 @@ class ApiSettings(_ConfigSection):
         workers: Worker processes; keep at 1 behind an external supervisor.
         root_path: Mount prefix when served behind a reverse proxy.
         title: Name shown in the generated OpenAPI document.
-        docs_enabled: Whether ``/docs`` and ``/openapi.json`` are served.
+        docs_enabled: Whether ``/docs`` and ``/openapi.json`` are served. Off by
+            default: the document is a complete map of the API for whoever can
+            reach the port, and the routes it maps now require a key anyway.
+            Turn it on for development.
         cors_origins: Exact origins allowed to call the API from a browser.
     """
 
@@ -115,7 +118,7 @@ class ApiSettings(_ConfigSection):
     workers: int = Field(default=1, ge=1, le=32)
     root_path: str = ""
     title: str = "MediaHub API"
-    docs_enabled: bool = True
+    docs_enabled: bool = False
     cors_origins: list[str] = Field(default_factory=list)
 
 

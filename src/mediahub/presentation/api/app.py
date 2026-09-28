@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mediahub import __version__
@@ -28,6 +28,7 @@ from mediahub.presentation.api.lifespan import build_lifespan
 from mediahub.presentation.api.middleware.access_log import AccessLogMiddleware
 from mediahub.presentation.api.middleware.correlation import CorrelationIdMiddleware
 from mediahub.presentation.api.routers import health
+from mediahub.presentation.api.security import require_api_key
 from mediahub.presentation.api.v1.router import api_v1_router
 from mediahub.shared.config.settings import get_settings
 from mediahub.shared.logging.setup import configure_logging
@@ -91,7 +92,10 @@ def create_app(
 
     register_exception_handlers(app)
 
+    # Health is deliberately unauthenticated: the container healthcheck and the
+    # host's monitoring call it, and it discloses nothing. Everything under the
+    # versioned prefix requires the shared key.
     app.include_router(health.router)
-    app.include_router(api_v1_router)
+    app.include_router(api_v1_router, dependencies=[Depends(require_api_key)])
 
     return app

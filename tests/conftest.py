@@ -154,14 +154,18 @@ def app(settings: Settings, container: Container) -> FastAPI:
 
 
 @pytest.fixture
-async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+async def client(app: FastAPI, settings: Settings) -> AsyncIterator[AsyncClient]:
     """An HTTP client bound to the app, with the lifespan actually running.
 
     Entering ``lifespan_context`` matters: it is what attaches the container to
     ``app.state``, so these tests exercise the same startup path production
-    does.
+    does. The client presents the API key by default, the way every real
+    caller must; the authentication tests override the header per request.
     """
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+        headers = {"X-MediaHub-Key": settings.security.secret_key.get_secret_value()}
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver", headers=headers
+        ) as http:
             yield http
