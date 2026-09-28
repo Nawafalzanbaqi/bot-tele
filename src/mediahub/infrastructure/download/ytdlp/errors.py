@@ -83,7 +83,13 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
         NoPlayableMediaError,
     ),
     # Session-gated. These phrases are what the platforms actually say when
-    # they are hiding something from a signed-out visitor.
+    # they are hiding something from a signed-out visitor. An age gate lands
+    # here too, deliberately: "Sign in to confirm your age" is fixed by the
+    # cookies of a verified account, so it is reported as something the user
+    # can act on. "please wait" used to be listed here; it is a throttling
+    # phrase ("Please wait a few minutes before you try again") and is now
+    # classified as rate limiting, where it is retried after a pause instead
+    # of being declared a permanent login failure.
     (
         (
             "nsfw tweet requires authentication",
@@ -100,7 +106,8 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "unable to extract universal data",
             "your ip address is blocked",
             "confirm you are not a robot",
-            "please wait",
+            "confirm you're not a bot",
+            "confirm you’re not a bot",
         ),
         AuthenticationRequiredError,
     ),
@@ -121,7 +128,10 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "this account has been suspended",
             "has been deleted",
             "no longer exists",
-            "404",
+            # The status code as a phrase, never as a bare substring: "404" on
+            # its own also matches a byte count, a lease id or a video id.
+            "http error 404",
+            "404: not found",
             "not found",
         ),
         ContentRemovedError,
@@ -132,7 +142,6 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "this video is private",
             "private video",
             "members-only",
-            "sign in to confirm your age",
             "age-restricted",
             "who has blocked it",
             "this live event has ended",
@@ -149,6 +158,9 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
     "too many requests",
     "rate limit",
     "rate-limit",
+    # "Please wait a few minutes before you try again" is YouTube throttling a
+    # client, not a login wall; retried after a pause, like the rest of these.
+    "please wait",
 )
 """Checked before the generic transient list: "wait" is a useful
 instruction and "the site is having trouble" is not."""
