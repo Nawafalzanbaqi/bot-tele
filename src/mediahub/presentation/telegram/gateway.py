@@ -16,12 +16,20 @@ Two safeguards that matter more than they look:
 * **De-duplication.** Telegram redelivers after a network blip, and a restart
   can replay. A bounded ring of recently-seen ids means one message never
   becomes two downloads.
+
+And one about time: **nothing an update triggers runs on the poll loop.** Each
+update is served by its own task. Handling a link means probing it, which is a
+network round-trip to the source of up to thirty seconds - and while the loop
+awaited that, no other update was read. A second person's link waited, and so
+did ``/cancel`` for the download the first person wanted stopped. Admission is
+bounded so a burst of a hundred updates becomes a queue, not a hundred probes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections import deque
 from typing import TYPE_CHECKING, Final
 
@@ -34,10 +42,30 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from mediahub.presentation.telegram.api import TelegramMessenger
     from mediahub.presentation.telegram.handlers import TelegramHandlers
+    from mediahub.presentation.telegram.updates import Intent
 
 DEFAULT_POLL_TIMEOUT_SECONDS: Final[int] = 30
 SEEN_CAPACITY: Final[int] = 512
 BACKOFF_SECONDS: Final[float] = 5.0
+
+HANDLER_CONCURRENCY: Final[int] = 8
+"""How many updates may be *served* at once.
+
+Serving is cheap - authorise, probe, reply, and hand any download to the
+handlers' own admission control - so this bounds probes in flight, not
+downloads. Eight is more than one household sends and small enough that a
+pasted list of fifty links does not open fifty connections from a board that
+is also someone's DNS server.
+"""
+
+SETTLE_TIMEOUT_SECONDS: Final[float] = 10.0
+"""How long a stopping gateway waits for updates still being served.
+
+A probe has a thirty-second budget but almost always answers in a few seconds;
+waiting the full budget would eat the drain window that running downloads need
+more. Whatever is still being served after this is cancelled - the person gets
+no reply to that one message, and sends it again when the bot is back.
+"""
 
 DRAIN_TIMEOUT_SECONDS: Final[float] = 55.0
 """How long a stopping gateway waits for running acquisitions.
@@ -54,6 +82,7 @@ class TelegramGateway:
     """Polls Telegram and feeds updates to the handlers."""
 
     __slots__ = (
+        "_admission",
         "_handlers",
         "_heartbeat",
         "_heartbeat_failed",
@@ -61,6 +90,7 @@ class TelegramGateway:
         "_offset",
         "_poll_timeout",
         "_seen",
+        "_serving",
         "_stopping",
     )
 
@@ -92,24 +122,58 @@ class TelegramGateway:
         self._offset: int | None = None
         self._seen: deque[int] = deque(maxlen=SEEN_CAPACITY)
         self._stopping = asyncio.Event()
+        self._serving: set[asyncio.Task[None]] = set()
+        self._admission = asyncio.Semaphore(HANDLER_CONCURRENCY)
+
+    @property
+    def pending_updates(self) -> int:
+        """Return how many accepted updates are still being served."""
+        return len(self._serving)
 
     async def run(self) -> None:
-        """Poll until :meth:`stop` is called, then drain in-flight work."""
+        """Poll until :meth:`stop` is called, then drain in-flight work.
+
+        Shutdown is two waits inside one budget: first for updates still being
+        served (short - a reply or a probe), then for the downloads they
+        started, which get whatever is left of the container's grace period.
+        """
         logger.info("Telegram gateway started")
         try:
             while not self._stopping.is_set():
                 await self._cycle()
         finally:
-            await self._handlers.drain(timeout=DRAIN_TIMEOUT_SECONDS)
+            spent = await self.settle(budget_seconds=SETTLE_TIMEOUT_SECONDS)
+            await self._handlers.drain(timeout=max(1.0, DRAIN_TIMEOUT_SECONDS - spent))
             logger.info("Telegram gateway stopped")
 
     def stop(self) -> None:
         """Ask the loop to finish after the current poll."""
         self._stopping.set()
 
-    async def poll_once(self) -> int:
-        """Fetch and dispatch one batch. Returns how many were handled.
+    async def settle(self, *, budget_seconds: float | None = None) -> float:
+        """Wait for every accepted update to finish being served.
 
+        Returns the seconds spent waiting - exactly zero when there was nothing
+        to wait for, so a caller sharing a budget across two waits can subtract
+        it. Anything still running when ``budget_seconds`` expires is cancelled.
+        """
+        if not self._serving:
+            return 0.0
+        started = time.monotonic()
+        pending = set(self._serving)
+        _done, late = await asyncio.wait(pending, timeout=budget_seconds)
+        for task in late:
+            task.cancel()
+        if late:
+            await asyncio.gather(*late, return_exceptions=True)
+            logger.bind(count=len(late)).warning("Cancelled updates still being served at shutdown")
+        return time.monotonic() - started
+
+    async def poll_once(self) -> int:
+        """Fetch one batch and start serving it. Returns how many were accepted.
+
+        Serving happens on separate tasks, so this returns as soon as the batch
+        has been read and dispatched; :meth:`settle` waits for the results.
         Exposed so the loop's behaviour can be tested without running it.
         """
         updates = await self._messenger.get_updates(offset=self._offset, timeout=self._poll_timeout)
@@ -127,9 +191,32 @@ class TelegramGateway:
                 continue
             self._seen.append(intent.update_id)
 
-            await self._handlers.handle(intent)
+            self._serve(intent)
             handled += 1
         return handled
+
+    def _serve(self, intent: Intent) -> None:
+        """Hand one update to the handlers on its own task."""
+        task = asyncio.create_task(self._serve_one(intent))
+        self._serving.add(task)
+        task.add_done_callback(self._serving.discard)
+
+    async def _serve_one(self, intent: Intent) -> None:
+        """Serve one update inside the admission bound, and never raise.
+
+        The handlers already turn every failure into a reply. This second net
+        exists because a task nobody awaits swallows its exception silently,
+        and a serving bug would otherwise vanish without a log line.
+        """
+        async with self._admission:
+            try:
+                await self._handlers.handle(intent)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.opt(exception=True).bind(update_id=intent.update_id).error(
+                    "Serving an update failed outside the handlers"
+                )
 
     async def _cycle(self) -> None:
         """Run one poll, absorbing transport failures."""

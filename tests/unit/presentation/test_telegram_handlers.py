@@ -717,6 +717,7 @@ class TestGatewayLoop:
 
         await gateway.poll_once()
         await gateway.poll_once()
+        await gateway.settle()
 
         assert len(messenger.sent) == 1
 

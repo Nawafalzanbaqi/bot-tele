@@ -145,6 +145,7 @@ async def test_a_link_becomes_a_delivered_file_and_an_empty_disk(
 
     # 1. The user sends a link; the gateway probes and offers choices.
     await gateway.poll_once()
+    await gateway.settle()
 
     prompt = messenger.sent[-1]
     assert "A Test Video" in prompt.text
@@ -162,6 +163,7 @@ async def test_a_link_becomes_a_delivered_file_and_an_empty_disk(
     token = str(buttons[0]["callback_data"]).split("|")[1]
     messenger.batches.append([callback_update(f"q|{token}|best", update_id=2)])
     await gateway.poll_once()
+    await gateway.settle()
     await gateway._handlers.drain(timeout=10)
 
     # 3. The file was uploaded to the right conversation.
@@ -189,16 +191,19 @@ async def test_history_reflects_what_was_delivered(workspace_root: Path) -> None
         workspace_root, batches=[[message_update(URL, update_id=1)]]
     )
     await gateway.poll_once()
+    await gateway.settle()
 
     token = str(
         messenger.sent[-1].reply_markup["inline_keyboard"][0][0]["callback_data"]  # type: ignore[index]
     ).split("|")[1]
     messenger.batches.append([callback_update(f"q|{token}|best", update_id=2)])
     await gateway.poll_once()
+    await gateway.settle()
     await gateway._handlers.drain(timeout=10)
 
     messenger.batches.append([message_update("/history", update_id=3)])
     await gateway.poll_once()
+    await gateway.settle()
 
     assert "A Test Video" in messenger.last_text
     assert "Best available" in messenger.last_text
@@ -210,6 +215,7 @@ async def test_settings_reports_the_effective_ceiling(workspace_root: Path) -> N
     )
 
     await gateway.poll_once()
+    await gateway.settle()
 
     # 50 MiB is Telegram's limit and lower than the engine's, so it is the one
     # that actually applies - which is exactly what a user needs to be told.
@@ -225,6 +231,7 @@ async def test_a_stranger_is_refused_and_nothing_happens(workspace_root: Path) -
     )
 
     await gateway.poll_once()
+    await gateway.settle()
 
     # Silence, not a refusal: a reply would confirm that a bot answers here.
     assert messenger.sent == []
