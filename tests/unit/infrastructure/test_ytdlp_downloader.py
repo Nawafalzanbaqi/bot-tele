@@ -551,6 +551,24 @@ class TestVerification:
         with pytest.raises(MetadataUnavailableError):
             await engine.fetch(DownloadRequest(url=URL), scope)
 
+    async def test_part_files_left_by_an_earlier_attempt_are_not_counted(
+        self, settings: DownloadSettings, scope: WorkspaceScope
+    ) -> None:
+        """A retry that resumed from attempt one leaves its fragments; they are not the result."""
+
+        def finish_beside_a_leftover(engine: FakeYoutubeDL) -> None:
+            engine.write_file("abc123.f137.mp4.part", 777)
+            engine.write_file("abc123.f140.m4a.ytdl", 33)
+            engine.write_file("abc123.mp4", 4096)
+
+        engine = build(settings, info=video_info(), script=[finish_beside_a_leftover])
+
+        result = await engine.fetch(DownloadRequest(url=URL), scope)
+
+        assert result.total_bytes == 4096
+        assert [artifact.name for artifact in result.artifacts] == ["abc123.mp4"]
+        assert scope.names() == ("abc123.mp4",), "the fragments were removed from the lease"
+
     async def test_engine_failure_cleans_up_partial_output(
         self, settings: DownloadSettings, scope: WorkspaceScope
     ) -> None:

@@ -864,6 +864,7 @@ class YtDlpDownloader:
 
         produced = [name for name in workspace.names() if name not in existing]
         self._reject_partials(produced, validated.value)
+        produced = self._drop_leftover_partials(produced, workspace)
         if not produced:
             message = f"'{validated.value}' completed without producing a file"
             raise MetadataUnavailableError(message)
@@ -908,6 +909,27 @@ class YtDlpDownloader:
         if produced and all(name.endswith(_PARTIAL_SUFFIXES) for name in produced):
             message = f"'{url}' produced only partial files"
             raise MetadataUnavailableError(message)
+
+    @staticmethod
+    def _drop_leftover_partials(produced: Sequence[str], workspace: WorkspaceScope) -> list[str]:
+        """Remove part-files an earlier attempt left beside a finished download.
+
+        A retried extraction resumes from, or abandons, the fragments of the
+        attempt before it. Once a complete file exists those fragments are
+        dead weight - and they were being counted: as sidecar artifacts, in
+        ``total_bytes``, and against the size ceiling. They are deleted here
+        so the result describes what will be delivered and nothing else.
+        """
+        leftovers = [name for name in produced if name.endswith(_PARTIAL_SUFFIXES)]
+        if not leftovers:
+            return list(produced)
+        for name in leftovers:
+            with contextlib.suppress(Exception):
+                workspace.remove(name)
+        logger.bind(count=len(leftovers)).debug(
+            "Removed partial files left beside the finished download"
+        )
+        return [name for name in produced if name not in leftovers]
 
     @staticmethod
     def _primary_name(info: Mapping[str, Any], produced: Sequence[str]) -> str:
