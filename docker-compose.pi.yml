@@ -67,6 +67,9 @@ services:
       # it, so sweeping it at startup is correct here and would not be if the
       # API shared it.
       MEDIAHUB_WORKSPACE__PURGE_ON_START: "true"
+      # Touched by the poll loop after every successful long-poll; the
+      # healthcheck below watches its age. See TelegramSettings.heartbeat_file.
+      MEDIAHUB_TELEGRAM__HEARTBEAT_FILE: /data/telegram-heartbeat
     volumes:
       - data:/data
       # The cookie jar, and deliberately **writable**.
@@ -111,11 +114,15 @@ services:
           # must exceed the largest artifact the destination will accept.
           memory: 1200M
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sqlite3,sys; sqlite3.connect('/data/mediahub.db').execute('select 1'); sys.exit(0)\""]
+      # The previous check opened the SQLite file from a fresh process, which
+      # passes while the poll loop is dead or wedged. This one fails when the
+      # loop has not completed a poll for 300 s (polls are <= 30 s apart; the
+      # margin covers a slow probe still running inline on the loop).
+      test: ["CMD-SHELL", "python -c \"import os,sys,time; sys.exit(0 if time.time()-os.stat('/data/telegram-heartbeat').st_mtime < 300 else 1)\""]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   api:
     <<: *common

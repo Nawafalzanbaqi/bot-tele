@@ -30,6 +30,8 @@ from loguru import logger
 from mediahub.presentation.telegram.updates import parse_update
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
+
     from mediahub.presentation.telegram.api import TelegramMessenger
     from mediahub.presentation.telegram.handlers import TelegramHandlers
 
@@ -37,11 +39,30 @@ DEFAULT_POLL_TIMEOUT_SECONDS: Final[int] = 30
 SEEN_CAPACITY: Final[int] = 512
 BACKOFF_SECONDS: Final[float] = 5.0
 
+DRAIN_TIMEOUT_SECONDS: Final[float] = 55.0
+"""How long a stopping gateway waits for running acquisitions.
+
+Just under the container's ``stop_grace_period`` (60 s in ``docker-compose.pi.yml``),
+which is the whole budget: anything still running when Docker's grace expires is
+killed mid-upload. The previous default of 30 s left half the budget unused and
+abandoned any download that needed it, contradicting the promise in
+``presentation/telegram/__main__.py`` that a deploy lets a download finish.
+"""
+
 
 class TelegramGateway:
     """Polls Telegram and feeds updates to the handlers."""
 
-    __slots__ = ("_handlers", "_messenger", "_offset", "_poll_timeout", "_seen", "_stopping")
+    __slots__ = (
+        "_handlers",
+        "_heartbeat",
+        "_heartbeat_failed",
+        "_messenger",
+        "_offset",
+        "_poll_timeout",
+        "_seen",
+        "_stopping",
+    )
 
     def __init__(
         self,
@@ -49,11 +70,25 @@ class TelegramGateway:
         handlers: TelegramHandlers,
         *,
         poll_timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
+        heartbeat_path: Path | None = None,
     ) -> None:
-        """Bind the gateway to its transport and handlers."""
+        """Bind the gateway to its transport and handlers.
+
+        Args:
+            messenger: The transport to poll and reply through.
+            handlers: Where parsed intents go.
+            poll_timeout_seconds: Long-poll duration.
+            heartbeat_path: A file whose modification time is refreshed after
+                every successful poll. It is the only liveness signal this
+                process has: it has no HTTP surface, and a healthcheck that
+                opens the database from a fresh process passes while the loop
+                is dead. ``None`` disables it.
+        """
         self._messenger = messenger
         self._handlers = handlers
         self._poll_timeout = poll_timeout_seconds
+        self._heartbeat = heartbeat_path
+        self._heartbeat_failed = False
         self._offset: int | None = None
         self._seen: deque[int] = deque(maxlen=SEEN_CAPACITY)
         self._stopping = asyncio.Event()
@@ -65,7 +100,7 @@ class TelegramGateway:
             while not self._stopping.is_set():
                 await self._cycle()
         finally:
-            await self._handlers.drain()
+            await self._handlers.drain(timeout=DRAIN_TIMEOUT_SECONDS)
             logger.info("Telegram gateway stopped")
 
     def stop(self) -> None:
@@ -78,6 +113,7 @@ class TelegramGateway:
         Exposed so the loop's behaviour can be tested without running it.
         """
         updates = await self._messenger.get_updates(offset=self._offset, timeout=self._poll_timeout)
+        self._beat()
         handled = 0
         for raw in updates:
             intent = parse_update(raw)
@@ -108,6 +144,23 @@ class TelegramGateway:
             logger.opt(exception=True).warning("Polling failed; backing off")
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopping.wait(), timeout=BACKOFF_SECONDS)
+
+    def _beat(self) -> None:
+        """Refresh the heartbeat file, if one is configured.
+
+        A failure here must never take the loop down - a read-only or missing
+        directory is a deployment mistake worth one warning, not a dead bot.
+        """
+        if self._heartbeat is None:
+            return
+        try:
+            self._heartbeat.touch()
+        except OSError:
+            if not self._heartbeat_failed:
+                self._heartbeat_failed = True
+                logger.opt(exception=True).warning("Could not refresh the heartbeat file")
+            return
+        self._heartbeat_failed = False
 
     def _advance(self, raw: object) -> None:
         """Move past an update the gateway does not understand."""

@@ -542,11 +542,17 @@ class TelegramSettings(_ConfigSection):
         session_ttl_seconds: How long a posted set of quality buttons stays
             valid. A button tapped after this fails cleanly instead of acting
             on a stale request.
+        heartbeat_file: A file the poll loop touches after every successful
+            poll, for a container healthcheck to watch. The gateway has no
+            HTTP surface, so without this its healthcheck can only prove that
+            *a* process can open the database - which stays true while the
+            loop is dead. ``None`` disables it.
     """
 
     enabled: bool = False
     bot_token: SecretStr = SecretStr("")
     api_base_url: str | None = None
+    heartbeat_file: Path | None = None
     owner_ids: list[str] = Field(default_factory=list)
     member_ids: list[str] = Field(default_factory=list)
     readonly_ids: list[str] = Field(default_factory=list)

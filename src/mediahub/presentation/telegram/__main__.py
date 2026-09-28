@@ -84,7 +84,12 @@ async def _run(settings: Settings) -> None:  # pragma: no cover - process wiring
             max_concurrent=telegram.max_concurrent_acquisitions,
         )
     )
-    gateway = TelegramGateway(client, handlers, poll_timeout_seconds=telegram.poll_timeout_seconds)
+    gateway = TelegramGateway(
+        client,
+        handlers,
+        poll_timeout_seconds=telegram.poll_timeout_seconds,
+        heartbeat_path=telegram.heartbeat_file,
+    )
 
     _install_signal_handlers(gateway)
     logger.bind(
