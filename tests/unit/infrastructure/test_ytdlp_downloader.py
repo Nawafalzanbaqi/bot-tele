@@ -154,10 +154,89 @@ class TestProbe:
         assert engine.options["skip_download"] is True
         assert engine.closed, "the engine must be released"
 
-    async def test_playlists_are_described_not_refused(self, settings: DownloadSettings) -> None:
+    async def test_an_empty_collection_is_described_not_refused(
+        self, settings: DownloadSettings
+    ) -> None:
         metadata = await build(settings, info=playlist_info(7)).probe(URL)
 
         assert metadata.is_playlist
+        assert metadata.entry_count == 7
+        assert metadata.from_playlist is False
+
+    async def test_probe_options_resolve_a_video_link_to_its_video_not_its_list(
+        self, settings: DownloadSettings
+    ) -> None:
+        """``watch?v=X&list=Y`` means X. And a flat list is read one entry deep."""
+        await build(settings, info=video_info()).probe(URL)
+
+        options = FakeYoutubeDL.instances[0].options
+        assert options["noplaylist"] is True
+        assert options["playlistend"] == 1
+        assert options["extract_flat"] == "in_playlist"
+
+
+class TestACollectionResolvesToItsFirstEntry:
+    """A playlist link is a request for *a* video, and the first is the only defensible guess."""
+
+    ENTRY = "https://example.com/watch?v=first111"
+
+    def _engine(self, settings: DownloadSettings, *, entry_url: str, entry_info: Any) -> Any:
+        """An engine that answers the collection URL with a flat list and the entry with a video."""
+        collection = playlist_info(
+            7, entries=[{"_type": "url", "url": entry_url, "id": "first111", "title": "First"}]
+        )
+
+        class ByUrl(FakeYoutubeDL):
+            def extract_info(self, url: str, *, download: bool = True) -> Any:
+                self.extract_calls.append((url, download))
+                self.info = dict(entry_info) if url == entry_url else dict(collection)
+                return self.info
+
+        return YtDlpDownloader(
+            settings,
+            url_policy=UrlPolicy(),
+            address_guard=None,
+            youtube_dl_factory=ByUrl,  # type: ignore[arg-type]
+        )
+
+    async def test_the_first_entry_is_probed_and_described(
+        self, settings: DownloadSettings
+    ) -> None:
+        engine = self._engine(settings, entry_url=self.ENTRY, entry_info=video_info(id="first111"))
+
+        metadata = await engine.probe(URL)
+
+        assert metadata.is_playlist is False
+        assert metadata.from_playlist is True
+        assert metadata.entry_count == 7, "the size of the list it came from"
+        assert metadata.url == self.ENTRY, "the acquisition must fetch the entry, not the list"
+        assert metadata.title == "A Test Video"
+        assert metadata.video_formats, "the entry was fully probed, not read flat"
+        calls = [call for engine_ in FakeYoutubeDL.instances for call in engine_.extract_calls]
+        assert [url for url, _ in calls] == [URL, self.ENTRY]
+        assert all(download is False for _, download in calls)
+
+    async def test_an_entry_that_may_not_be_fetched_leaves_the_collection_described(
+        self, settings: DownloadSettings
+    ) -> None:
+        """The entry URL came from a third party's page and gets the scrutiny of typed input."""
+        engine = self._engine(
+            settings, entry_url="ftp://example.com/first", entry_info=video_info()
+        )
+
+        metadata = await engine.probe(URL)
+
+        assert metadata.is_playlist is True
+        assert metadata.from_playlist is False
+
+    async def test_a_collection_of_collections_stops_at_one_level(
+        self, settings: DownloadSettings
+    ) -> None:
+        engine = self._engine(settings, entry_url=self.ENTRY, entry_info=playlist_info(3))
+
+        metadata = await engine.probe(URL)
+
+        assert metadata.is_playlist is True
         assert metadata.entry_count == 7
 
     async def test_invalid_url_is_refused_before_any_engine_is_built(
@@ -549,9 +628,9 @@ class TestEgressIsUsedOnlyWhereItIsNeeded:
 
         await downloader.probe(URL)
 
-        assert (
-            FakeYoutubeDL.instances[0].options.get("proxy") is None
-        ), "a source that works must not be sent down the tunnel"
+        assert FakeYoutubeDL.instances[0].options.get("proxy") is None, (
+            "a source that works must not be sent down the tunnel"
+        )
 
     async def test_a_listed_host_goes_through_the_egress_immediately(self) -> None:
         """No wasted first attempt for a host already known to need it."""

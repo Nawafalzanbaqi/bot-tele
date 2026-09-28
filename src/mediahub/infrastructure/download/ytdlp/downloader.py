@@ -30,7 +30,7 @@ import asyncio
 import contextlib
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -648,7 +648,42 @@ class YtDlpDownloader:
             expected_bytes=metadata.expected_bytes,
             egress="proxy" if via_proxy else "direct",
         ).debug("Probed source")
+        if metadata.is_playlist:
+            return await self._first_of(metadata, info, timeout_seconds=timeout_seconds)
         return metadata
+
+    async def _first_of(
+        self, collection: MediaMetadata, info: Mapping[str, Any], *, timeout_seconds: float
+    ) -> MediaMetadata:
+        """Resolve a collection to its first entry, when it has one that can be fetched.
+
+        A person who pastes a playlist link almost always wants *a* video, and
+        the first is the only defensible guess; refusing the whole link taught
+        them nothing except to open the list and copy an entry by hand. The
+        entry's URL goes through the same validation as anything typed in - it
+        came from a third party's page - and if it cannot be fetched, or the
+        collection is empty, the collection is described as before and the
+        caller decides what to say.
+        """
+        first = _first_entry_url(info)
+        if first is None:
+            return collection
+        try:
+            validated = self._validate(first)
+        except Exception as error:
+            logger.bind(url=collection.url, reason=type(error).__name__).info(
+                "A collection's first entry could not be fetched; describing the collection"
+            )
+            return collection
+        entry = await self._probe_once(validated, timeout_seconds=timeout_seconds)
+        if entry.is_playlist:
+            # A collection of collections. One level is what was promised.
+            return collection
+        size = collection.entry_count
+        logger.bind(collection=collection.url, entry=entry.url, size=size).info(
+            "Resolved a collection to its first entry"
+        )
+        return replace(entry, from_playlist=True, entry_count=size)
 
     def _blocking_probe(
         self,
@@ -661,7 +696,6 @@ class YtDlpDownloader:
         """Extract metadata synchronously. Runs in a worker thread."""
         options = build_probe_options(
             self._settings,
-            allow_playlist=True,
             socket_timeout_seconds=min(timeout_seconds, self._settings.socket_timeout_seconds),
             proxy=proxy,
             impersonate=impersonate,
@@ -846,7 +880,7 @@ class YtDlpDownloader:
             raise LiveSourceNotAllowedError(message, provider=metadata.provider)
         if metadata.is_playlist and not request.allow_playlist:
             message = (
-                f"'{metadata.url}' is a collection and collection downloads " f"were not requested"
+                f"'{metadata.url}' is a collection and collection downloads were not requested"
             )
             raise PlaylistNotAllowedError(
                 message, entry_count=metadata.entry_count, provider=metadata.provider
@@ -921,6 +955,22 @@ class YtDlpDownloader:
             if name not in existing:
                 with contextlib.suppress(Exception):
                     workspace.remove(name)
+
+
+def _first_entry_url(info: Mapping[str, Any]) -> str | None:
+    """Return the page URL of a flat collection's first entry, if it names one."""
+    entries = info.get("entries")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("webpage_url", "url"):
+            candidate = entry.get(key)
+            if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
+                return candidate
+        break
+    return None
 
 
 def _thread_finished(task: asyncio.Task[Mapping[str, Any]]) -> None:

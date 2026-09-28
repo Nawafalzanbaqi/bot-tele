@@ -82,4 +82,6 @@ class ProbeSource:
             duration_seconds=metadata.duration_seconds,
             thumbnail_url=None if thumbnail is None else thumbnail.url,
             expected_bytes=metadata.expected_bytes,
+            from_playlist=metadata.from_playlist,
+            playlist_size=metadata.entry_count if metadata.from_playlist else None,
         )

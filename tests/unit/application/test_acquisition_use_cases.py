@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -46,6 +48,7 @@ from mediahub.infrastructure.delivery.registry import (
     ProviderRegistration,
 )
 from mediahub.infrastructure.download.ytdlp.downloader import YtDlpDownloader
+from mediahub.infrastructure.download.ytdlp.mapping import to_metadata
 from mediahub.infrastructure.persistence.memory.journal import InMemoryAcquisitionJournal
 from mediahub.infrastructure.workspace.filesystem import FilesystemWorkspace
 from mediahub.shared.config.settings import DownloadSettings
@@ -186,6 +189,33 @@ class TestProbeSource:
         summary = await use_case.execute(ProbeSourceQuery(url=URL))
 
         assert "h1080" not in [option.key for option in summary.qualities]
+
+    async def test_an_item_taken_from_a_collection_says_so(self) -> None:
+        class FromCollection:
+            async def probe(self, url: str, *, timeout_seconds: float | None = None) -> Any:
+                del timeout_seconds
+                return replace(
+                    to_metadata(video_info(), url=url, probed_at=NOW),
+                    from_playlist=True,
+                    entry_count=12,
+                )
+
+        use_case = ProbeSource(downloader=FromCollection())  # type: ignore[arg-type]
+
+        summary = await use_case.execute(ProbeSourceQuery(url=URL))
+
+        assert summary.from_playlist is True
+        assert summary.playlist_size == 12
+        assert summary.is_playlist is False
+        assert summary.qualities, "the item itself is offered, not the list"
+
+    async def test_an_ordinary_item_carries_no_collection_note(self) -> None:
+        use_case = ProbeSource(downloader=engine(info=video_info()))
+
+        summary = await use_case.execute(ProbeSourceQuery(url=URL))
+
+        assert summary.from_playlist is False
+        assert summary.playlist_size is None
 
 
 class TestAcquireMedia:

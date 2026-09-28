@@ -197,6 +197,8 @@ class SourceSummary:
         is_playlist: Whether the URL denotes a collection.
         expected_bytes: Rough size of the default choice.
         qualities: The choices on offer, best first.
+        from_playlist: Whether the link was a collection and this is its first
+            item. ``playlist_size`` is how many the collection held.
     """
 
     url: str
@@ -209,6 +211,8 @@ class SourceSummary:
     duration_seconds: float | None = None
     thumbnail_url: str | None = None
     expected_bytes: int | None = None
+    from_playlist: bool = False
+    playlist_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

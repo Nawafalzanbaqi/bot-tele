@@ -98,7 +98,6 @@ def base_options(
 def build_probe_options(
     settings: DownloadSettings,
     *,
-    allow_playlist: bool = False,
     socket_timeout_seconds: float | None = None,
     proxy: str | None = None,
     impersonate: str | None = None,
@@ -107,14 +106,21 @@ def build_probe_options(
 
     ``extract_flat`` is what keeps a probe cheap: a playlist is recognised and
     counted without resolving every entry, so probing a channel costs one
-    request rather than five hundred.
+    request rather than five hundred. ``playlistend`` keeps even that flat list
+    to one entry, which is the only one the adapter goes on to resolve.
+
+    ``noplaylist`` is what makes a *video* link that happens to carry a
+    playlist parameter mean the video: ``watch?v=X&list=Y`` is the clip the
+    person is looking at, not the first of the list beside it. A URL that is
+    only a playlist is unaffected and still comes back as a collection.
     """
     options = base_options(settings, proxy=proxy, impersonate=impersonate)
     options.update(
         {
             "skip_download": True,
-            "noplaylist": not allow_playlist,
+            "noplaylist": True,
             "extract_flat": "in_playlist",
+            "playlistend": 1,
             "writethumbnail": False,
         }
     )

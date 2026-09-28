@@ -193,10 +193,16 @@ def render_source(summary: SourceSummary, *, automatic: bool = False) -> str:
         facts.append(_bytes(summary.expected_bytes))
     lines.append(" · ".join(facts))
 
+    if summary.from_playlist:
+        # The link was a list and this is its first item. Said before the offer
+        # line, so a person who wanted the third video knows before it arrives.
+        size = f" من {summary.playlist_size}" if summary.playlist_size else ""
+        lines.append(f"\n📋 الرابط قائمة؛ هذا أول مقطع فيها{size}.")
+
     if summary.is_live:
         lines.append("\nهذا بث مباشر ولا يمكن جلبه.")
     elif summary.is_playlist:
-        lines.append("\nهذا الرابط قائمة. أرسل رابط مقطع واحد.")
+        lines.append("\nهذا الرابط قائمة ولم أجد فيها ما يمكن جلبه. أرسل رابط مقطع واحد.")
     elif not summary.qualities:
         lines.append("\nلا يوجد هنا ما يمكن جلبه.")
     elif automatic:

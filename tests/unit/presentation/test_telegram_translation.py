@@ -263,6 +263,20 @@ class TestFormatters:
         text = formatters.render_source(summary(is_playlist=True))
 
         assert "قائمة" in text
+        assert "اختر الجودة" not in text
+
+    def test_an_item_taken_from_a_playlist_says_which_and_still_offers_it(self) -> None:
+        text = formatters.render_source(summary(from_playlist=True, playlist_size=12))
+
+        assert "أول مقطع" in text
+        assert "12" in text
+        assert "اختر الجودة" in text, "the first item is offered like any other"
+
+    def test_the_collection_note_needs_no_size(self) -> None:
+        text = formatters.render_source(summary(from_playlist=True))
+
+        assert "أول مقطع" in text
+        assert "من None" not in text
 
     def test_titles_are_shown_verbatim_as_plain_text(self) -> None:
         """No parse mode is ever set, so nothing needs escaping - or wrapping.

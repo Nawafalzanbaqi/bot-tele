@@ -299,7 +299,13 @@ class MediaMetadata:
         is_live: Whether this is a live stream. Live sources have no end and are
             refused unless explicitly allowed.
         is_playlist: Whether the URL denotes a collection rather than one item.
-        entry_count: Number of entries when ``is_playlist`` is true.
+        entry_count: Number of entries when ``is_playlist`` is true - or, when
+            ``from_playlist`` is true, the size of the collection this item was
+            taken from.
+        from_playlist: Whether this item was reached through a collection URL,
+            of which it is the first entry. Set so the caller can say "this was
+            a playlist; here is its first video" instead of silently treating
+            the two as the same request.
         uploader: Channel or account name.
         upload_date: Publication date, when known (UTC).
         description: Description, truncated by the adapter.
@@ -321,6 +327,7 @@ class MediaMetadata:
     is_live: bool = False
     is_playlist: bool = False
     entry_count: int | None = None
+    from_playlist: bool = False
     uploader: str | None = None
     upload_date: datetime | None = None
     description: str | None = None
@@ -537,8 +544,7 @@ class DownloadResult:
         ]
         if len(primaries) != 1:
             message = (
-                f"a download result must contain exactly one primary artifact, "
-                f"got {len(primaries)}"
+                f"a download result must contain exactly one primary artifact, got {len(primaries)}"
             )
             raise InvalidDownloadResultError(message)
 
