@@ -60,7 +60,11 @@ _SENSITIVE_ASSIGNMENT = re.compile(
     # behind `MEDIAHUB_SECURITY__SECRET_KEY` as behind a bare `secret`, and an
     # underscore is a word character, so a `\b` here fails for the same reason
     # as above.
-    r"([\w.\-\[\]]*(?:token|secret|password|passwd|api[_-]?hash|api[_-]?key|authorization)"
+    r"([\w.\-\[\]]*(?:token|secret|password|passwd|api[_-]?hash|api[_-]?key|api[_-]?id"
+    # Named key material, not a bare "key": WIREGUARD_PRIVATE_KEY and friends
+    # reach the log through the environment dump of a crashing process, while
+    # "key" alone would redact dictionary keys and cache keys all over the logs.
+    r"|(?:private|preshared|signing|access|session)[_-]?key|authorization)"
     r"[\w.\-\[\]]*)"
     # The separator: `=` or `:`, optionally quoted on either side so JSON is
     # covered, and optionally followed by an auth scheme whose argument is the
@@ -81,6 +85,8 @@ _SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
         "api_id",
         "api_key",
         "authorization",
+        "private_key",
+        "preshared_key",
     }
 )
 """Structured ``extra`` fields replaced wholesale rather than pattern-matched."""

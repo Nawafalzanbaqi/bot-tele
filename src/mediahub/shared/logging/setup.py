@@ -21,10 +21,10 @@ from loguru import logger
 
 from mediahub.shared.logging.context import UNSET_CORRELATION_ID, get_correlation_id
 from mediahub.shared.logging.intercept import configure_stdlib_logging
-from mediahub.shared.logging.redaction import scrub_record
+from mediahub.shared.logging.redaction import redact, scrub_record
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from loguru import Record
+    from loguru import Message, Record
 
     from mediahub.shared.config.settings import Settings
 
@@ -52,6 +52,18 @@ def _patch_record(record: Record) -> None:
     scrub_record(record)
 
 
+def _redacting_stdout(message: Message) -> None:
+    """Write one fully formatted line to stdout, redacted a second time.
+
+    The patcher above scrubs ``message`` and ``extra`` before formatting, but a
+    record's *exception* is rendered by Loguru after the patcher has run, and a
+    traceback carries the text of every frame - including a request URL with
+    the bot token in it. This is the last point where the whole line exists as
+    text, JSON or not, so it is the one place a traceback can be caught.
+    """
+    sys.stdout.write(redact(str(message)))
+
+
 def configure_logging(settings: Settings) -> None:
     """Install the process-wide logging configuration.
 
@@ -69,7 +81,7 @@ def configure_logging(settings: Settings) -> None:
         extra={"correlation_id": UNSET_CORRELATION_ID},
     )
     logger.add(
-        sys.stdout,
+        _redacting_stdout,
         level=log_settings.level.value,
         format="{message}" if log_settings.json_format else TEXT_FORMAT,
         serialize=log_settings.json_format,

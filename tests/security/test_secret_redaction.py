@@ -108,11 +108,60 @@ def test_a_token_inside_a_traceback_is_redacted(sink: list[str]) -> None:
         ("TELEGRAM_API_HASH: 0123456789abcdef0123456789abcdef", "0123456789abcdef"),
         ('{"password": "s3cr3t-value"}', "s3cr3t-value"),
         ("Authorization=Bearer eyJhbGciOiJIUzI1NiJ9", "eyJhbGciOiJIUzI1NiJ9"),
+        # The rest of what this process's neighbours hold: the VPN container's
+        # keys and the Bot API server's application id both sit in the same
+        # .env and appear in an environment dump when a process dies.
+        ("WIREGUARD_PRIVATE_KEY=oK3f9Q2mX8pL1vN4rT7yU0wZ5aB6cD8eF2gH4jK6l=", "oK3f9Q2mX8pL"),
+        ("WIREGUARD_PRESHARED_KEY=pS7kR2vB9nM4xC6zL1qW8eT3yU5iO0aD2fG4hJ6k=", "pS7kR2vB9nM4"),
+        ("TELEGRAM_API_ID=8653097410", "8653097410"),
     ],
-    ids=["dsn-password", "secret-key", "api-hash", "json-password", "bearer"],
+    ids=[
+        "dsn-password",
+        "secret-key",
+        "api-hash",
+        "json-password",
+        "bearer",
+        "wireguard-private",
+        "wireguard-preshared",
+        "api-id",
+    ],
 )
 def test_other_credentials_are_redacted(text: str, secret: str) -> None:
     assert secret not in redact(text)
+
+
+class TestTracebacks:
+    """An exception is rendered by the sink *after* the patcher has run.
+
+    The earlier "traceback" test logged a string, which the patcher does catch.
+    A real exception carries its message in ``record["exception"]``, which the
+    patcher never sees - so the token in a failed request's error text reached
+    stdout intact. The stdout sink now redacts the fully formatted line.
+    """
+
+    @pytest.mark.parametrize("json_format", [False, True], ids=["text", "json"])
+    def test_a_token_in_a_real_exception_is_redacted(
+        self, json_format: bool, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging(
+            Settings(
+                _env_file=None,
+                environment=Environment.TESTING,
+                logging=LoggingSettings(json_format=json_format, backtrace=False, diagnose=False),
+                security=SecuritySettings(),
+                telegram=TelegramSettings(),
+            )
+        )
+        try:
+            message = f"POST https://api.telegram.org/bot{BOT_TOKEN}/getUpdates failed"
+            raise ConnectionError(message)
+        except ConnectionError:
+            logger.opt(exception=True).error("Polling failed; backing off")
+
+        out = capsys.readouterr().out
+        assert "ConnectionError" in out, "the traceback itself must still be written"
+        assert not contains_secret(out, secrets=[BOT_SECRET])
+        assert PLACEHOLDER in out
 
 
 # -- What must NOT be mangled ------------------------------------------------
