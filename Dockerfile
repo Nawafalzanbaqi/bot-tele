@@ -13,6 +13,16 @@
 
 ARG PYTHON_VERSION=3.13
 
+# Engine pins. scripts/refresh.sh asks PyPI for the newest yt-dlp (pre-releases included -
+# the nightly channel carries extractor fixes weeks before the stable tag) and gallery-dl,
+# passes them as --build-arg and rebuilds. The image stays the unit of change: nothing
+# updates itself at runtime.
+ARG YTDLP_VERSION=2026.9.27.232945.dev0
+ARG GALLERYDL_VERSION=1.32.14
+# yt-dlp >= 2025.11 needs a JavaScript runtime for YouTube's signature/n-challenge scripts.
+# Without one every YouTube download silently caps at 240p (measured on this Pi, 2026-09-28).
+ARG DENO_VERSION=v2.9.7
+
 # --------------------------------------------------------------------------- #
 # Builder                                                                      #
 # --------------------------------------------------------------------------- #
@@ -25,7 +35,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/opt/venv/bin:${PATH}"
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y build-essential \
+    && apt-get install --no-install-recommends -y build-essential ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv "${VIRTUAL_ENV}"
@@ -63,7 +73,30 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # either way and only discovers the missing library when a download is already
 # under way, which turns a one-line configuration mistake into an intermittent
 # runtime failure.
-RUN python -m pip install --upgrade --pre "yt-dlp[default,curl-cffi]" "PySocks>=1.7.1"
+ARG YTDLP_VERSION
+ARG GALLERYDL_VERSION
+RUN python -m pip install "yt-dlp[default,curl-cffi]==${YTDLP_VERSION}" \
+        "gallery-dl==${GALLERYDL_VERSION}" "PySocks>=1.7.1" \
+    && python -c 'import yt_dlp, gallery_dl.version as g; print("yt-dlp", yt_dlp.version.__version__, "gallery-dl", g.__version__)'
+
+# deno: the JavaScript runtime yt-dlp runs YouTube's challenge scripts in. Fetched from the
+# official release with its published SHA-256 checked, so the pin above is the whole story.
+ARG DENO_VERSION
+ARG TARGETARCH
+RUN set -eu; \
+    case "${TARGETARCH:-arm64}" in \
+      arm64) triple=aarch64-unknown-linux-gnu ;; \
+      amd64) triple=x86_64-unknown-linux-gnu ;; \
+      *) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/denoland/deno/releases/download/${DENO_VERSION}"; \
+    curl -fsSL "${base}/deno-${triple}.zip" -o /tmp/deno.zip; \
+    curl -fsSL "${base}/deno-${triple}.zip.sha256sum" -o /tmp/deno.sha256; \
+    (cd /tmp && awk '{print $1"  deno.zip"}' deno.sha256 | sha256sum -c -); \
+    unzip -q /tmp/deno.zip -d /usr/local/bin; \
+    chmod 755 /usr/local/bin/deno; \
+    rm -f /tmp/deno.zip /tmp/deno.sha256; \
+    /usr/local/bin/deno --version
 
 # --------------------------------------------------------------------------- #
 # Development                                                                  #
@@ -102,14 +135,26 @@ ENV PYTHONUNBUFFERED=1 \
 # asked for 1080p. From the distribution rather than a static build, so it gets
 # security updates through a base image rebuild
 # (docs/architecture/18-deployment-architecture.md §18.2).
+#
+# aria2 is an optional external downloader for yt-dlp (many connections per file). It is in
+# the image so the choice can be made by measurement and flipped by configuration.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ffmpeg \
+    && apt-get install --no-install-recommends -y ffmpeg aria2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 1001 mediahub \
     && useradd --uid 1001 --gid mediahub --create-home --shell /bin/bash mediahub
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /usr/local/bin/deno /usr/local/bin/deno
+RUN deno --version && aria2c --version | head -1
+
+ARG YTDLP_VERSION
+ARG GALLERYDL_VERSION
+ARG DENO_VERSION
+LABEL mediahub.engine.ytdlp="${YTDLP_VERSION}" \
+      mediahub.engine.gallerydl="${GALLERYDL_VERSION}" \
+      mediahub.engine.deno="${DENO_VERSION}"
 
 WORKDIR /app
 COPY --chown=mediahub:mediahub alembic.ini ./alembic.ini
