@@ -24,7 +24,7 @@ from loguru import logger
 
 from mediahub.application.access.use_cases.authorize_principal import AuthorizeQuery
 from mediahub.application.common.cancellation import CancellationSource
-from mediahub.application.common.errors import ApplicationError
+from mediahub.application.common.errors import ApplicationError, PermissionDeniedError
 from mediahub.application.delivery.ports import DeliveryTarget, TargetAddress
 from mediahub.application.download.dto import (
     AcquireMediaCommand,
@@ -146,6 +146,15 @@ class TelegramHandlers:
         try:
             principal = await self._authorise(intent)
             await self._dispatch(intent, principal)
+        except PermissionDeniedError:
+            # Silence, on purpose. A sender outside the allow-list learns
+            # nothing - not even that a bot answers here - and the refusal is
+            # already in the audit log. Replying cost one outbound message per
+            # probe and confirmed the bot's existence to whoever was probing.
+            # A button press is still acknowledged, wordlessly, so a client
+            # that somehow holds a valid-looking button does not spin forever.
+            if intent.kind is IntentKind.CALLBACK:
+                await self._acknowledge(intent, None)
         except (DomainError, ApplicationError) as exc:
             await self._reply_error(intent, exc.code)
         except Exception:
@@ -203,8 +212,30 @@ class TelegramHandlers:
             await self._say(intent, formatters.render_history(entries))
         elif intent.command == "cookies":
             await self._on_cookies(intent, principal)
+        elif intent.command == "cancel":
+            await self._on_cancel(intent, principal)
         else:
             await self._say(intent, formatters.render_help())
+
+    async def _on_cancel(self, intent: Intent, principal: Principal) -> None:
+        """Stop the caller's running acquisitions in this conversation.
+
+        The command counterpart of the inline "Stop" button. The button sits on
+        a message that scrolls away, and once the session behind it expires
+        there is no button at all - a person watching a stuck download needs a
+        way to say "stop" that always works. Only the caller's own sessions are
+        touched; the store never hands over anyone else's.
+        """
+        running = self._services.sessions.running_for(
+            owner=principal.identity, chat_id=intent.chat_id
+        )
+        if not running:
+            await self._say(intent, formatters.render_nothing_to_cancel())
+            return
+        for session in running:
+            if session.cancellation is not None:
+                session.cancellation.cancel()
+        await self._say(intent, formatters.render_cancelling(len(running)))
 
     async def _on_cookies(self, intent: Intent, principal: Principal) -> None:
         """Report or remove the stored cookie jar.
@@ -479,7 +510,7 @@ class TelegramHandlers:
             with contextlib.suppress(Exception):
                 await self._services.messenger.send_message(chat_id=session.chat_id, text=text)
 
-    async def _acknowledge(self, intent: Intent, text: str) -> None:
+    async def _acknowledge(self, intent: Intent, text: str | None) -> None:
         """Answer a button press so the client stops spinning."""
         if intent.callback_id is None:  # pragma: no cover - callbacks always carry one
             return
@@ -505,6 +536,8 @@ COMMAND_ACTIONS: Final[dict[str, Action]] = {
     # Replacing the jar changes who the device fetches as, and reading it back
     # names the accounts it is signed in to. Both are owner-only.
     "cookies": Action.MANAGE_CREDENTIALS,
+    # The same action the inline Stop button carries.
+    "cancel": Action.CANCEL_ACQUISITION,
 }
 """Commands needing something other than the mildest action.
 

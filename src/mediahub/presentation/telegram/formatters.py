@@ -150,6 +150,7 @@ def render_help() -> str:
         "/help — هذه الرسالة\n"
         "/settings — ما تستطيعه هذه النسخة\n"
         "/history — ما حمّلته مؤخرًا\n"
+        "/cancel — إيقاف التحميل الجاري\n"
         "/cookies — الكوكيز المحفوظة (للمالك فقط)\n\n"
         "بعض المواقع — X وتيك توك وإنستقرام الخاص — لا تعرض شيئًا لزائر غير "
         "مسجّل. أرسل لي ملف cookies.txt بصيغة Netscape وسأستخدمه.\n\n"
@@ -280,6 +281,18 @@ def render_settings(capabilities: CapabilitiesSummary) -> str:
         f"بث مباشر · {yes if capabilities.allow_live else no}\n"
         f"القوائم · {yes if capabilities.allow_playlist else no}"
     )
+
+
+def render_nothing_to_cancel() -> str:
+    """Render the answer to ``/cancel`` when nothing of the caller's is running."""
+    return "لا يوجد تحميل جارٍ لك هنا."
+
+
+def render_cancelling(count: int) -> str:
+    """Render the acknowledgement of ``/cancel``."""
+    if count > 1:
+        return f"جارٍ إيقاف {count} تحميلات…"
+    return "جارٍ الإيقاف…"
 
 
 def render_error(code: str) -> str:

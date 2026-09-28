@@ -316,6 +316,60 @@ class TestCommands:
 
         assert "/help" in messenger.last_text
 
+    async def test_help_mentions_cancel(self, messenger: FakeMessenger) -> None:
+        handlers, _ = build(messenger)
+
+        await handle(handlers, message_update("/help"))
+
+        assert "/cancel" in messenger.last_text
+
+
+class TestCancelCommand:
+    async def test_cancel_with_nothing_running_says_so(self, messenger: FakeMessenger) -> None:
+        handlers, _ = build(messenger)
+
+        await handle(handlers, message_update("/cancel"))
+
+        assert "لا يوجد تحميل" in messenger.last_text
+
+    async def test_cancel_stops_the_callers_running_acquisition(
+        self, messenger: FakeMessenger
+    ) -> None:
+        acquire = FakeAcquire(hold=True)
+        handlers, _ = build(messenger, acquire=acquire, auto=True)
+
+        await handle(handlers, message_update(URL))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert handlers.pending_tasks == 1
+
+        await handle(handlers, message_update("/cancel", update_id=2, message_id=8))
+
+        assert "جارٍ الإيقاف" in messenger.sent[-1].text
+        acquire.gate.set()
+        await handlers.drain(timeout=1.0)
+        assert acquire.observed_cancel
+
+    async def test_cancel_never_reaches_another_users_download(
+        self, messenger: FakeMessenger
+    ) -> None:
+        acquire = FakeAcquire(hold=True)
+        handlers, _ = build(messenger, acquire=acquire, auto=True)
+
+        await handle(handlers, message_update(URL, user_id=4242, chat_id=4242))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        await handle(
+            handlers,
+            message_update("/cancel", update_id=2, user_id=5151, chat_id=5151, message_id=8),
+        )
+
+        assert "لا يوجد تحميل" in messenger.sent[-1].text
+        acquire.gate.set()
+        await handlers.drain(timeout=1.0)
+        assert not acquire.observed_cancel
+
 
 # --------------------------------------------------------------------------- #
 # The URL flow                                                                 #

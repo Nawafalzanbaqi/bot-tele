@@ -120,4 +120,5 @@ class TestShutdown:
 
         assert match is not None, "the telegram service must declare stop_grace_period"
         assert DRAIN_TIMEOUT_SECONDS < int(match.group(1))
-        assert DRAIN_TIMEOUT_SECONDS >= 45, "a drain shorter than this abandons real downloads"
+        # Anything shorter abandons real downloads for no reason.
+        assert DRAIN_TIMEOUT_SECONDS >= 45

@@ -7,6 +7,7 @@ for what) and the general rule that an error must never disclose internals.
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,7 @@ from mediahub.application.download.dto import SourceSummary
 from mediahub.domain.access.enums import Action
 from mediahub.domain.access.policies import AllowListPolicy, AuthorizationPolicy
 from mediahub.domain.media.enums import MediaType
+from mediahub.infrastructure.delivery.telegram.client import PythonTelegramBotClient
 from mediahub.presentation.telegram import formatters
 from mediahub.presentation.telegram.handlers import GatewayServices, TelegramHandlers
 from mediahub.presentation.telegram.sessions import SessionStore
@@ -132,16 +134,31 @@ class TestAllowList:
         assert not tripwire.called
         assert audit.events[-1].outcome is AuditOutcome.DENIED
 
-    async def test_a_stranger_gets_one_refusal_and_no_hints(self) -> None:
+    async def test_a_stranger_gets_no_reply_at_all(self) -> None:
+        """Silence, not a refusal: a reply confirms that a bot answers here.
+
+        The denial is still audited (see below), which is where an owner who
+        mistyped their own id will find it.
+        """
         audit = RecordingAudit()
         handlers, messenger, _ = build(audit, [ALLOWED_USER])
 
         await send(handlers, message_update("/help", user_id=STRANGER))
+        await send(handlers, message_update("https://example.com/a", user_id=STRANGER))
 
-        assert len(messenger.sent) == 1
-        text = messenger.sent[0].text
-        assert "غير مصرّح" in text
-        assert "/history" not in text, "a refusal must not advertise the command set"
+        assert messenger.sent == []
+        assert messenger.edits == []
+        assert audit.events[-1].outcome is AuditOutcome.DENIED
+
+    async def test_a_strangers_button_press_is_acknowledged_without_words(self) -> None:
+        """The client must stop spinning, but learn nothing."""
+        audit = RecordingAudit()
+        handlers, messenger, _ = build(audit, [ALLOWED_USER])
+
+        await send(handlers, callback_update("q|abc123|best", user_id=STRANGER))
+
+        assert messenger.sent == []
+        assert messenger.answers == [("cb-1", None)]
 
     async def test_an_empty_allow_list_admits_nobody(self) -> None:
         audit = RecordingAudit()
@@ -211,7 +228,17 @@ class TestDisclosure:
             assert "yt-dlp" not in message, "the engine's identity is not the user's problem"
 
     def test_titles_cannot_inject_formatting(self) -> None:
-        # A source title is attacker-controlled and reaches every message.
+        """A source title is attacker-controlled and reaches every message.
+
+        Messages are plain text: the real client never passes a parse mode on a
+        send or an edit, so markup characters in a title are *shown*, never
+        interpreted. That is the property that makes rendering a hostile title
+        verbatim safe, and the first assertion is the guard that keeps it so -
+        adding a parse mode to the client must come with escaping here.
+        """
+        client_source = inspect.getsource(PythonTelegramBotClient)
+        assert "parse_mode" not in client_source, "plain text is a security property here"
+
         hostile = SourceSummary(
             url="https://example.com/a",
             provider="p",
@@ -224,5 +251,4 @@ class TestDisclosure:
 
         rendered = formatters.render_source(hostile)
 
-        assert "`" not in rendered
-        assert "](" not in rendered
+        assert rendered.startswith(hostile.title)

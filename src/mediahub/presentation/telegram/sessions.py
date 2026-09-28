@@ -101,6 +101,23 @@ class SessionStore:
         """Forget a session. Unknown tokens are ignored."""
         self._sessions.pop(token, None)
 
+    def running_for(self, *, owner: str, chat_id: str) -> list[Session]:
+        """Return the caller's live sessions in ``chat_id`` that have an acquisition running.
+
+        "Running" means the gateway has attached a cancellation source, which it
+        does the moment an acquisition task starts. Only the caller's own sessions
+        are returned, for the same reason :meth:`get` refuses another owner's
+        token: one person must not be able to stop another's download.
+        """
+        return [
+            session
+            for session in self._sessions.values()
+            if session.owner == owner
+            and session.chat_id == chat_id
+            and session.cancellation is not None
+            and not self._is_expired(session)
+        ]
+
     def __len__(self) -> int:
         """Return how many sessions are held, expired ones included."""
         return len(self._sessions)
