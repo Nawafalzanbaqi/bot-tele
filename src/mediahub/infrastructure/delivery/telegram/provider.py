@@ -29,7 +29,6 @@ file in chunks, so it stays as real and stays bounded.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -50,7 +49,6 @@ from mediahub.application.delivery.ports import (
     RemoteArtifactRef,
     RemoteMessageRef,
 )
-from mediahub.domain.common.fingerprint import Fingerprint, HashAlgorithm
 from mediahub.infrastructure.delivery.shared.measured_reader import MeasuredReader
 from mediahub.infrastructure.delivery.telegram.errors import (
     PROVIDER,
@@ -241,13 +239,15 @@ class TelegramDeliveryProvider:
         The server reads the file directly, which also means the bytes are
         never copied over a socket to a process on the same machine.
 
-        The checksum is still real. It is computed by streaming the file in
-        chunks rather than by measuring an upload that no longer happens, which
-        costs one sequential read and never more than a buffer of memory.
+        No checksum on this path. When the bytes stream through this process
+        the digest comes free with the measuring wrapper; here it would cost a
+        second sequential read of up to 2 GB - tens of seconds of CPU on a
+        small board, before the upload can even start - to produce a value
+        nothing stores or compares. The file's completeness is established
+        before delivery, by the stream inspection in the download engine.
         """
         started = time.monotonic()
         _report(on_progress, DeliveryStage.UPLOADING, 0, size)
-        checksum = await asyncio.to_thread(_digest_of, path)
 
         uploaded = await self._upload(request, chat, path, thumbnail, local_path=path)
 
@@ -262,7 +262,7 @@ class TelegramDeliveryProvider:
             message_id=uploaded.message_id,
             size_bytes=uploaded.bytes_sent or size,
             started=started,
-            checksum=checksum,
+            checksum=None,
             reused=False,
         )
 
@@ -276,7 +276,7 @@ class TelegramDeliveryProvider:
         """
         chat = self._chat_of(request.target)
         if not request.reference.is_usable_by(self._bot_principal):
-            message = "That reference was issued to different credentials and cannot " "be re-sent."
+            message = "That reference was issued to different credentials and cannot be re-sent."
             raise ReferenceNotUsableError(message, provider=PROVIDER)
 
         started = time.monotonic()
@@ -429,20 +429,6 @@ class TelegramDeliveryProvider:
             checksum=checksum,
             reused_reference=reused,
         )
-
-
-def _digest_of(path: Path, *, chunk: int = 1024 * 1024) -> Fingerprint:
-    """Return a file's checksum, read in chunks.
-
-    Sequential and bounded: the point of delivering by path is that a large
-    file never sits in memory, and a checksum that slurped the file would
-    reintroduce exactly what was avoided.
-    """
-    digest = hashlib.new(HashAlgorithm.SHA256.value)
-    with path.open("rb") as handle:
-        while block := handle.read(chunk):
-            digest.update(block)
-    return Fingerprint(algorithm=HashAlgorithm.SHA256, digest=digest.hexdigest())
 
 
 def _report(

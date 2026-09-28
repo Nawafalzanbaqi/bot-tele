@@ -199,3 +199,17 @@ class TestTheRetry:
             await provider.deliver(request_for(scope), scope)
 
         assert no_sleep == []
+
+
+class TestDeliveryByPath:
+    async def test_the_file_is_not_read_a_second_time_for_a_checksum(
+        self, scope: WorkspaceScope
+    ) -> None:
+        """Handing over a path is the point; hashing the file first would read it all again."""
+        uploader = FakeUploader()
+
+        receipt = await local_provider(uploader).deliver(request_for(scope), scope)
+
+        assert receipt.checksum is None
+        assert receipt.size_bytes == 4096
+        assert len(uploader.uploads) == 1
