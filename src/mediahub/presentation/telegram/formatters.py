@@ -53,7 +53,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     # to do about it. A message that only names the fault leaves the reader
     # re-sending the same link and hoping.
     "invalid_url": (
-        "هذا لا يبدو رابطًا أستطيع جلبه.\n\n" "تأكد أنك نسخت الرابط كاملًا وأنه يبدأ بـ http."
+        "هذا لا يبدو رابطًا أستطيع جلبه.\n\nتأكد أنك نسخت الرابط كاملًا وأنه يبدأ بـ http."
     ),
     "invalid_cookie_jar": (
         "⚠️ هذا ليس ملف كوكيز صالحًا.\n\n"
@@ -61,7 +61,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
         "فيه سطر لكل كوكي."
     ),
     "cookie_store_unavailable": (
-        "هذه النسخة غير مضبوطة لحفظ الكوكيز.\n\n" "أبلغ من يشغّل البوت ليضبط مكان الحفظ."
+        "هذه النسخة غير مضبوطة لحفظ الكوكيز.\n\nأبلغ من يشغّل البوت ليضبط مكان الحفظ."
     ),
     "upload_failed": "تعذّرت قراءة الملف. أرسله مرة أخرى.",
     "unsupported_url_scheme": "أستطيع جلب روابط http و https فقط.",
@@ -99,17 +99,13 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
         "هذا حجب في الشبكة بين الجهاز والموقع، وليس عطلًا في الموقع. "
         "جرّبت المسار البديل أيضًا ولم ينجح — جرّب لاحقًا أو أبلغ من يشغّل البوت."
     ),
-    "rate_limited": (
-        "⏳ الموقع يطلب منّي التمهّل.\n\n" "انتظر دقائق قليلة ثم أرسل الرابط مرة أخرى."
-    ),
+    "rate_limited": ("⏳ الموقع يطلب منّي التمهّل.\n\nانتظر دقائق قليلة ثم أرسل الرابط مرة أخرى."),
     "metadata_unavailable": (
-        "تعذّرت قراءة هذا الرابط.\n\n" "قد يكون خاصًّا، أو مقيّدًا بالعمر، أو خلف اشتراك مدفوع."
+        "تعذّرت قراءة هذا الرابط.\n\nقد يكون خاصًّا، أو مقيّدًا بالعمر، أو خلف اشتراك مدفوع."
     ),
     "format_unavailable": ("هذه الجودة لم تعد متاحة.\n\nأرسل الرابط مرة أخرى لقائمة جديدة."),
     "provider_error": "الموقع يواجه مشكلة مؤقتة الآن.\n\nجرّب بعد دقائق.",
-    "download_failed": (
-        "لم يكتمل التحميل.\n\n" "جرّب بعد دقائق؛ إن تكرّر فالمصدر نفسه هو المشكلة."
-    ),
+    "download_failed": ("لم يكتمل التحميل.\n\nجرّب بعد دقائق؛ إن تكرّر فالمصدر نفسه هو المشكلة."),
     "download_timeout": "استغرق وقتًا أطول ممّا يجب فأوقفته.",
     "download_incomplete": (
         "وصل الملف ناقصًا — مدّته أقل ممّا أعلنه الموقع أو لا يُقرأ كفيديو — فلم أُرسله.\n\n"
@@ -122,7 +118,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     # and none used to have a sentence of their own: they fell through to the
     # generic error, which reads as "try again" when trying again cannot help.
     "workspace_quota_exceeded": (
-        "لا توجد مساحة كافية لهذا الملف الآن.\n\n" "انتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
+        "لا توجد مساحة كافية لهذا الملف الآن.\n\nانتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
     ),
     "lease_closed": "توقّف هذا التحميل قبل أن يكتمل. أرسل الرابط مرة أخرى.",
     "workspace_inconsistent": "حدث خلل في مساحة العمل على الجهاز. أعد المحاولة، وإن تكرّر فأبلِغني.",
@@ -136,13 +132,13 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "resend_not_supported": "هذه الوجهة لا تدعم إعادة الإرسال.",
     "no_provider_for_target": "لا توجد وجهة مضبوطة لهذا.",
     "live_source_not_allowed": (
-        "البث المباشر غير مدعوم.\n\n" "انتظر انتهاء البث ثم أرسل رابط التسجيل."
+        "البث المباشر غير مدعوم.\n\nانتظر انتهاء البث ثم أرسل رابط التسجيل."
     ),
     "playlist_not_allowed": (
-        "هذا الرابط قائمة وليس مقطعًا واحدًا.\n\n" "افتح المقطع الذي تريده وانسخ رابطه وحده."
+        "هذا الرابط قائمة وليس مقطعًا واحدًا.\n\nافتح المقطع الذي تريده وانسخ رابطه وحده."
     ),
     "insufficient_disk_space": (
-        "لا توجد مساحة كافية الآن.\n\n" "انتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
+        "لا توجد مساحة كافية الآن.\n\nانتظر انتهاء التحميلات الجارية ثم أعد المحاولة."
     ),
     "delivery_target_unreachable": "تعذّر الإرسال إلى هذه المحادثة.",
     "delivery_provider_error": "فشل الإرسال. جرّب بعد دقائق.",
@@ -158,7 +154,7 @@ GENERIC_ERROR: Final[str] = "حدث خطأ غير متوقّع. جرّب مرة 
 def render_start(display_name: str | None) -> str:
     """Render the greeting."""
     who = f" يا {display_name}" if display_name else ""
-    return f"أهلًا{who}. أرسل لي رابطًا وسأجلبه لك.\n\n" "اكتب /help لتعرف ما أفهمه."
+    return f"أهلًا{who}. أرسل لي رابطًا وسأجلبه لك.\n\nاكتب /help لتعرف ما أفهمه."
 
 
 def render_help() -> str:
@@ -170,6 +166,7 @@ def render_help() -> str:
         "/settings — ما تستطيعه هذه النسخة\n"
         "/history — ما حمّلته مؤخرًا\n"
         "/cancel — إيقاف التحميل الجاري\n"
+        "/vpn <رابط> — جلبه عبر نفق WARP وتوجيه موقعه عبره من الآن؛ بدون رابط يعرض القائمة\n"
         "/cookies — الكوكيز المحفوظة (للمالك فقط)\n\n"
         "بعض المواقع — X وتيك توك وإنستقرام الخاص — لا تعرض شيئًا لزائر غير "
         "مسجّل. أرسل لي ملف cookies.txt بصيغة Netscape وسأستخدمه.\n\n"
@@ -326,6 +323,34 @@ def render_settings(capabilities: CapabilitiesSummary) -> str:
         f"بث مباشر · {yes if capabilities.allow_live else no}\n"
         f"القوائم · {yes if capabilities.allow_playlist else no}"
     )
+
+
+def render_vpn_unavailable() -> str:
+    """Render the answer to ``/vpn`` on a deployment with no egress."""
+    return "لا يوجد نفق خروج مضبوط في هذه النسخة."
+
+
+def render_vpn_routes(hosts: Sequence[str]) -> str:
+    """Render the hosts currently routed through the egress, for ``/vpn`` alone."""
+    if not hosts:
+        return (
+            "لا توجد مواقع موجَّهة عبر النفق حاليًا.\n\n"
+            "أرسل /vpn مع رابط لجلبه عبر النفق وتوجيه موقعه عبره من الآن."
+        )
+    lines = ["المواقع الموجَّهة عبر نفق الخروج من أول محاولة:"]
+    lines.extend(f"• {host}" for host in hosts)
+    lines.append(
+        "\nالقائمة المتعلَّمة محفوظة في ملف على الجهاز ويُعاد قراءتها عند تعديله؛ "
+        "احذف سطرًا ليُجرَّب موقعه مباشرة مرة أخرى."
+    )
+    return "\n".join(lines)
+
+
+def render_vpn_pinned(host: str, *, already: bool) -> str:
+    """Render the acknowledgement of ``/vpn <link>``."""
+    if already:
+        return f"🛡 {host} موجَّه عبر النفق أصلًا؛ جارٍ الجلب عبره."
+    return f"🛡 سيُجلب هذا الرابط عبر النفق، وسيُوجَّه {host} عبره من الآن."
 
 
 def render_nothing_to_cancel() -> str:
@@ -597,7 +622,7 @@ def _signed_in_line(summary: CookieSummary) -> str:
     signed = "، ".join(summary.signed_in) if summary.signed_in else "لا شيء"
     if not missing:
         return f"✅ مسجّل الدخول في: {signed}"
-    return f"✅ مسجّل الدخول في: {signed}\n" f"⚠️ بلا جلسة دخول: {'، '.join(missing)}"
+    return f"✅ مسجّل الدخول في: {signed}\n⚠️ بلا جلسة دخول: {'، '.join(missing)}"
 
 
 def render_cookies_installed(summary: CookieSummary, *, removed: bool) -> str:

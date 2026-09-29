@@ -561,6 +561,31 @@ class DownloadResult:
         return (self.finished_at - self.started_at).total_seconds()
 
 
+class EgressRoutes(Protocol):
+    """Which hosts the engine fetches through the egress proxy, and how to add one.
+
+    The engine learns these on its own when a direct connection is refused in
+    a way that names the address. This is the operator's hand on the same
+    list: pin a host before the first attempt, and see what is routed.
+    """
+
+    @property
+    def is_configured(self) -> bool:
+        """Return whether an egress exists at all."""
+        ...
+
+    def pin(self, host: str) -> bool:
+        """Route ``host`` (and its subdomains) through the egress from now on.
+
+        Returns whether that was new; a host already routed is left alone.
+        """
+        ...
+
+    def routed(self) -> tuple[str, ...]:
+        """Return every host currently routed through the egress, sorted."""
+        ...
+
+
 # --------------------------------------------------------------------------- #
 # Capabilities and the port                                                    #
 # --------------------------------------------------------------------------- #

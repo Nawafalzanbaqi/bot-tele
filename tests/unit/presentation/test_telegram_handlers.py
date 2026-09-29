@@ -34,10 +34,15 @@ from mediahub.application.download.errors import (
     NoPlayableMediaError,
 )
 from mediahub.application.download.ports import DownloadProgress, DownloadStage
-from mediahub.domain.access.enums import Role
+from mediahub.domain.access.enums import Action, Role
 from mediahub.domain.media.enums import MediaType
+from mediahub.presentation.telegram import formatters
 from mediahub.presentation.telegram.gateway import TelegramGateway
-from mediahub.presentation.telegram.handlers import GatewayServices, TelegramHandlers
+from mediahub.presentation.telegram.handlers import (
+    COMMAND_ACTIONS,
+    GatewayServices,
+    TelegramHandlers,
+)
 from mediahub.presentation.telegram.keyboards import (
     CallbackAction,
     CallbackPayload,
@@ -226,6 +231,31 @@ def messenger() -> FakeMessenger:
     return FakeMessenger()
 
 
+class FakeEgress:
+    """Stands in for the engine's egress routes."""
+
+    def __init__(
+        self, *, configured: bool = True, routed: tuple[str, ...] = ("blocked.example",)
+    ) -> None:
+        self.configured = configured
+        self._routed = list(routed)
+        self.pinned: list[str] = []
+
+    @property
+    def is_configured(self) -> bool:
+        return self.configured
+
+    def pin(self, host: str) -> bool:
+        self.pinned.append(host)
+        if host in self._routed:
+            return False
+        self._routed.append(host)
+        return True
+
+    def routed(self) -> tuple[str, ...]:
+        return tuple(sorted(self._routed))
+
+
 def build(
     messenger: FakeMessenger,
     *,
@@ -235,6 +265,7 @@ def build(
     history: FakeHistory | None = None,
     auto: bool = False,
     max_concurrent: int = 1,
+    egress: FakeEgress | None = None,
 ) -> tuple[TelegramHandlers, GatewayServices]:
     cookie_store = FakeCookieStore()
     services = GatewayServices(
@@ -251,6 +282,7 @@ def build(
         progress_interval_seconds=0.01,
         auto_best_quality=auto,
         max_concurrent=max_concurrent,
+        egress=egress,
     )
     return TelegramHandlers(services), services
 
@@ -691,6 +723,91 @@ class TestProgressPresenter:
         await presenter.stop()
 
         assert messenger.edits == []
+
+
+# --------------------------------------------------------------------------- #
+# /vpn                                                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestVpnCommand:
+    async def test_a_link_pins_its_host_and_is_then_handled_like_any_link(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress()
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe, egress=egress)
+
+        await handle(handlers, message_update("/vpn https://Video.Example.com/watch?v=1"))
+
+        assert egress.pinned == ["video.example.com"], "pinned by host, lower-cased"
+        assert probe.calls == ["https://Video.Example.com/watch?v=1"], "then probed as usual"
+        assert "video.example.com" in messenger.sent[0].text
+        assert "عبر النفق" in messenger.sent[0].text
+        assert "اختر الجودة" in messenger.sent[1].text, "the ordinary source card follows"
+
+    async def test_a_host_already_routed_is_said_to_be(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress(routed=("example.com",))
+        handlers, _ = build(messenger, egress=egress)
+
+        await handle(handlers, message_update("/vpn https://example.com/a"))
+
+        assert "أصلًا" in messenger.sent[0].text
+        assert egress.routed() == ("example.com",)
+
+    async def test_without_a_link_the_routes_are_listed(self) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe()
+        handlers, _ = build(
+            messenger, probe=probe, egress=FakeEgress(routed=("b.example", "a.example"))
+        )
+
+        await handle(handlers, message_update("/vpn"))
+
+        text = messenger.sent[0].text
+        assert "• a.example\n• b.example" in text
+        assert "ملف" in text, "says the list lives in an editable file"
+        assert probe.calls == []
+
+    async def test_an_empty_list_says_so(self) -> None:
+        messenger = FakeMessenger()
+        handlers, _ = build(messenger, egress=FakeEgress(routed=()))
+
+        await handle(handlers, message_update("/vpn"))
+
+        assert "لا توجد مواقع" in messenger.sent[0].text
+
+    async def test_something_that_is_not_a_link_gets_the_help(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress()
+        handlers, _ = build(messenger, egress=egress)
+
+        await handle(handlers, message_update("/vpn please"))
+
+        assert "/vpn" in messenger.sent[0].text, "the help names the command"
+        assert egress.pinned == []
+
+    async def test_without_an_egress_the_command_says_so(self) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update("/vpn https://example.com/a"))
+
+        assert "لا يوجد نفق" in messenger.sent[0].text
+        assert probe.calls == []
+
+    async def test_an_unconfigured_egress_counts_as_none(self) -> None:
+        messenger = FakeMessenger()
+        handlers, _ = build(messenger, egress=FakeEgress(configured=False))
+
+        await handle(handlers, message_update("/vpn"))
+
+        assert "لا يوجد نفق" in messenger.sent[0].text
+
+    def test_vpn_is_a_source_submission_for_access_purposes(self) -> None:
+        assert COMMAND_ACTIONS["vpn"] is Action.SUBMIT_SOURCE
+        assert "/vpn" in formatters.render_help()
 
 
 # --------------------------------------------------------------------------- #

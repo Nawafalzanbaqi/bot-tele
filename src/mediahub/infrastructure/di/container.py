@@ -104,7 +104,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.credentials.ports import CookieStore
     from mediahub.application.delivery.ports import DeliveryProvider, DeliveryRouter
     from mediahub.application.download.journal import AcquisitionJournal
-    from mediahub.application.download.ports import DownloaderPort
+    from mediahub.application.download.ports import DownloaderPort, EgressRoutes
     from mediahub.application.download.queue import JobQueue
     from mediahub.application.workspace.ports import WorkspacePort
     from mediahub.shared.config.settings import Settings
@@ -143,6 +143,8 @@ class Container:
     cookies: CookieStore = field(default_factory=lambda: FilesystemCookieStore(None))
     allow_list: AllowListPolicy = field(default_factory=AllowListPolicy)
     authorization: AuthorizationPolicy = field(default_factory=AuthorizationPolicy)
+    egress: EgressRoutes | None = None
+    """The engine's egress routes, for the operator's /vpn; ``None`` without an engine."""
 
     # -- Media use cases -----------------------------------------------------
 
@@ -546,13 +548,15 @@ def build_container(settings: Settings) -> Container:
 
     clock = SystemClock()
     workspace = _build_workspace(settings, clock)
+    downloader, egress = _build_downloader(settings)
     container = Container(
         settings=settings,
         clock=clock,
         uuid_generator=Uuid4Generator(),
         event_publisher=LoggingEventPublisher(),
         unit_of_work=unit_of_work,
-        downloader=_build_downloader(settings),
+        downloader=downloader,
+        egress=egress,
         workspace=workspace,
         database=database,
         job_queue=job_queue,
@@ -621,15 +625,16 @@ def _build_allow_list(settings: Settings) -> AllowListPolicy:
     )
 
 
-def _build_downloader(settings: Settings) -> DownloaderPort:
+def _build_downloader(settings: Settings) -> tuple[DownloaderPort, EgressRoutes | None]:
     """Return the real engine when enabled, and the null adapter otherwise.
 
     The engine is off by default so that a deployment which has not been
     configured for downloading reports the capability as unavailable rather than
-    failing at the first job.
+    failing at the first job. The second item is the engine's egress policy,
+    handed to the operator's surface; there is none without an engine.
     """
     if not settings.download.enabled:
-        return NullDownloader()
+        return NullDownloader(), None
 
     policy = UrlPolicy(block_private_networks=settings.security.block_private_networks)
     guard = DnsAddressGuard(policy)
@@ -643,8 +648,9 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
             else None
         ),
     )
+    egress = video.proxy_policy
     if not settings.download.images_enabled:
-        return video
+        return video, egress
 
     images = GalleryDlDownloader(settings.download, url_policy=policy, address_guard=guard)
     if not images.is_available:
@@ -655,5 +661,5 @@ def _build_downloader(settings: Settings) -> DownloaderPort:
             "Image downloads are enabled but gallery-dl is not installed; "
             "photo posts will keep being refused"
         )
-        return video
-    return CompositeDownloader(video, images)
+        return video, egress
+    return CompositeDownloader(video, images), egress

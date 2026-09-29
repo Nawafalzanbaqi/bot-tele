@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
@@ -57,6 +57,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         DiscardCookies,
         InstallCookies,
     )
+    from mediahub.application.download.ports import EgressRoutes
     from mediahub.application.download.use_cases.acquire_media import AcquireMedia
     from mediahub.application.download.use_cases.describe_capabilities import (
         DescribeCapabilities,
@@ -147,6 +148,8 @@ class GatewayServices:
     """Start immediately at the best deliverable quality, with no menu."""
     max_concurrent: int = 1
     """Acquisitions allowed to run at once. Excess ones wait rather than fail."""
+    egress: EgressRoutes | None = None
+    """The engine's egress routes, for /vpn. ``None`` when there is no egress to offer."""
 
 
 class TelegramHandlers:
@@ -245,8 +248,44 @@ class TelegramHandlers:
             await self._on_cookies(intent, principal)
         elif intent.command == "cancel":
             await self._on_cancel(intent, principal)
+        elif intent.command == "vpn":
+            await self._on_vpn(intent, principal)
         else:
             await self._say(intent, formatters.render_help())
+
+    async def _on_vpn(self, intent: Intent, principal: Principal) -> None:
+        """Fetch a link through the egress, and route its host that way from now on.
+
+        The engine escalates on its own when a direct connection is refused;
+        this is for the person who already knows the answer and would rather
+        not pay the failed direct attempt. Pinning is by *host*, so it also
+        covers the next link from the same site - which is what the persisted
+        host list is for. Without a link, it shows that list.
+        """
+        egress = self._services.egress
+        if egress is None or not egress.is_configured:
+            await self._say(intent, formatters.render_vpn_unavailable())
+            return
+        argument = (intent.argument or "").strip()
+        if not argument:
+            await self._say(intent, formatters.render_vpn_routes(egress.routed()))
+            return
+        if not argument.lower().startswith(URL_PREFIXES):
+            await self._say(intent, formatters.render_help())
+            return
+
+        host = _host_of(argument)
+        pinned = egress.pin(host)
+        logger.bind(host=host, new=pinned, actor=principal.identity).info(
+            "Host pinned to the egress by /vpn"
+        )
+        await self._say(intent, formatters.render_vpn_pinned(host, already=not pinned))
+        # From here it is an ordinary link: probe, offer or auto-fetch. The
+        # policy now routes its host through the egress on the first attempt.
+        await self._on_text(
+            replace(intent, kind=IntentKind.TEXT, text=argument, command=None, argument=None),
+            principal,
+        )
 
     async def _on_cancel(self, intent: Intent, principal: Principal) -> None:
         """Stop the caller's running acquisitions in this conversation.
@@ -580,6 +619,8 @@ COMMAND_ACTIONS: Final[dict[str, Action]] = {
     "cookies": Action.MANAGE_CREDENTIALS,
     # The same action the inline Stop button carries.
     "cancel": Action.CANCEL_ACQUISITION,
+    # Submitting a link, with a routing instruction attached.
+    "vpn": Action.SUBMIT_SOURCE,
 }
 """Commands needing something other than the mildest action.
 

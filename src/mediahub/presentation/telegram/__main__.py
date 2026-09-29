@@ -89,6 +89,7 @@ async def _run(settings: Settings) -> None:  # pragma: no cover - process wiring
             history_limit=telegram.history_limit,
             auto_best_quality=telegram.auto_best_quality,
             max_concurrent=telegram.max_concurrent_acquisitions,
+            egress=container.egress,
         )
     )
     gateway = TelegramGateway(
