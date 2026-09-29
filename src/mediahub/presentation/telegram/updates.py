@@ -149,7 +149,12 @@ def _parse_message(message: Mapping[str, Any], update_id: int) -> Intent | None:
     if isinstance(document, dict):
         return _parse_document(document, sender, chat_id, update_id, message_id)
 
-    text = _text(message.get("text"), MAX_TEXT_LENGTH)
+    # A link shared *with* a picture or a clip arrives as a caption, not as
+    # text. Telegram's share sheets do this routinely, and until 2026-09-29
+    # such a message was dropped without a word - the link was right there.
+    text = _text(message.get("text"), MAX_TEXT_LENGTH) or _text(
+        message.get("caption"), MAX_TEXT_LENGTH
+    )
     if not text:
         return None
 

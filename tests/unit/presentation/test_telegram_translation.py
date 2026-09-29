@@ -93,6 +93,47 @@ class TestUpdateParsing:
     def test_ignores_messages_from_bots(self) -> None:
         assert parse_update(message_update("hello", is_bot=True)) is None
 
+    def test_a_link_in_a_caption_is_text(self) -> None:
+        """A clip shared with its link attached arrives as media plus caption."""
+        update = message_update("unused")
+        del update["message"]["text"]
+        update["message"]["caption"] = "https://example.com/clip"
+        update["message"]["video"] = {"file_id": "v1", "duration": 12}
+
+        intent = parse_update(update)
+
+        assert intent is not None
+        assert intent.kind is IntentKind.TEXT
+        assert intent.text == "https://example.com/clip"
+
+    def test_text_wins_over_a_caption(self) -> None:
+        update = message_update("https://example.com/text")
+        update["message"]["caption"] = "https://example.com/caption"
+
+        intent = parse_update(update)
+
+        assert intent is not None
+        assert intent.text == "https://example.com/text"
+
+    def test_media_without_a_caption_is_still_ignored(self) -> None:
+        update = message_update("unused")
+        del update["message"]["text"]
+        update["message"]["sticker"] = {"file_id": "s1"}
+
+        assert parse_update(update) is None
+
+    def test_a_document_with_a_caption_is_still_a_document(self) -> None:
+        """A cookie jar upload may carry a note; the file is what matters."""
+        update = message_update("unused")
+        del update["message"]["text"]
+        update["message"]["caption"] = "my cookies"
+        update["message"]["document"] = {"file_id": "d1", "file_name": "cookies.txt"}
+
+        intent = parse_update(update)
+
+        assert intent is not None
+        assert intent.kind is IntentKind.DOCUMENT
+
     @pytest.mark.parametrize(
         "update",
         [

@@ -47,6 +47,12 @@ DEFAULT_POLL_TIMEOUT_SECONDS: Final[int] = 30
 SEEN_CAPACITY: Final[int] = 512
 BACKOFF_SECONDS: Final[float] = 5.0
 
+_MESSAGE_ENVELOPE_KEYS: Final[frozenset[str]] = frozenset(
+    {"message_id", "from", "chat", "date", "sender_chat", "message_thread_id", "edit_date"}
+)
+"""Fields every message carries. Excluded from the "what was in it" log line,
+which is meant to show the *content* fields - photo, sticker, voice - only."""
+
 HANDLER_CONCURRENCY: Final[int] = 8
 """How many updates may be *served* at once.
 
@@ -200,6 +206,7 @@ class TelegramGateway:
             intent = parse_update(raw)
             if intent is None:
                 self._advance(raw)
+                self._note_ignored(raw)
                 continue
 
             self._offset = intent.update_id + 1
@@ -272,3 +279,28 @@ class TelegramGateway:
             update_id = raw.get("update_id")
             if isinstance(update_id, int) and not isinstance(update_id, bool):
                 self._offset = update_id + 1
+
+    @staticmethod
+    def _note_ignored(raw: object) -> None:
+        """Say that an update was dropped, and what shape it had.
+
+        Shape only - the update's *kind* (edited message, channel post, member
+        change) and, for a message, the names of its content fields (sticker,
+        photo, voice). Never the content: a caption or a text may carry a URL
+        with a token in it. Without this line a message the bot could not read
+        left no trace at all, and "I sent it and nothing happened" had nothing
+        to be checked against.
+        """
+        if not isinstance(raw, dict):
+            logger.bind(shape=type(raw).__name__).info("Ignored an update that was not an object")
+            return
+        kinds = sorted(key for key in raw if key != "update_id")
+        message = raw.get("message")
+        content: list[str] = []
+        if isinstance(message, dict):
+            content = sorted(
+                key for key in message if key not in _MESSAGE_ENVELOPE_KEYS and message.get(key)
+            )
+        logger.bind(update_id=raw.get("update_id"), kinds=kinds, content=content).info(
+            "Ignored an update the gateway does not handle"
+        )

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from loguru import logger
 
 from mediahub.presentation.telegram import gateway as gateway_module
 from mediahub.presentation.telegram.gateway import (
@@ -213,6 +214,47 @@ class TestServingIsOffTheLoop:
         gateway = TelegramGateway(FakeMessenger(), RecordingHandlers())
 
         assert await gateway.settle() == 0.0
+
+
+class TestIgnoredUpdatesLeaveATrace:
+    """What the gateway drops, it names - by shape, never by content."""
+
+    async def _poll_with_log(self, update: dict[str, Any]) -> list[str]:
+        written: list[str] = []
+        handle = logger.add(written.append, format="{message} {extra}", level="INFO")
+        try:
+            gateway = TelegramGateway(FakeMessenger(batches=[[update]]), RecordingHandlers())
+            await gateway.poll_once()
+        finally:
+            logger.remove(handle)
+        return [line for line in written if "Ignored an update" in line]
+
+    async def test_a_channel_post_is_named_by_kind(self) -> None:
+        lines = await self._poll_with_log(
+            {"update_id": 41, "channel_post": {"text": "https://example.com/secret", "chat": {}}}
+        )
+
+        assert len(lines) == 1
+        assert "'kinds': ['channel_post']" in lines[0]
+        assert "secret" not in lines[0]
+
+    async def test_a_message_without_text_is_named_by_its_content_fields(self) -> None:
+        update = message_update("unused", update_id=42)
+        del update["message"]["text"]
+        update["message"]["sticker"] = {"file_id": "abc"}
+        update["message"]["date"] = 1700000000
+
+        lines = await self._poll_with_log(update)
+
+        assert len(lines) == 1
+        assert "'kinds': ['message']" in lines[0]
+        assert "'content': ['sticker']" in lines[0]
+        assert "abc" not in lines[0]
+
+    async def test_a_handled_update_is_not_reported_as_ignored(self) -> None:
+        lines = await self._poll_with_log(message_update("https://example.com/a", update_id=43))
+
+        assert lines == []
 
 
 class TestShutdown:
