@@ -118,3 +118,33 @@ class TestWorkerSettings:
         worker = WorkerSettings(role="delivery", index=3, host="pi5")
 
         assert (worker.role, worker.index, worker.host) == ("delivery", 3, "pi5")
+
+
+class TestListsFromTheEnvironment:
+    """Host and country lists are typed by hand in .env; a comma list must work."""
+
+    def test_a_comma_list_is_accepted_for_every_list_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MEDIAHUB_DOWNLOAD__PROTON_COUNTRIES", "nl, PL,ro")
+        monkeypatch.setenv("MEDIAHUB_DOWNLOAD__PROXY_HOSTS", ".X.com, tiktok.com")
+        monkeypatch.setenv("MEDIAHUB_DOWNLOAD__IMPERSONATE_HOSTS", "a.example")
+
+        download = Settings(_env_file=None).download
+
+        assert download.proton_countries == ("nl", "pl", "ro")
+        assert download.proxy_hosts == ("x.com", "tiktok.com")
+        assert download.impersonate_hosts == ("a.example",)
+
+    def test_json_is_still_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MEDIAHUB_DOWNLOAD__PROTON_COUNTRIES", '["pl", "nl"]')
+
+        assert Settings(_env_file=None).download.proton_countries == ("pl", "nl")
+
+    def test_an_empty_value_is_an_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MEDIAHUB_DOWNLOAD__PROXY_HOSTS", "")
+
+        assert Settings(_env_file=None).download.proxy_hosts == ()
+
+    def test_the_default_country_order_is_the_free_tier_in_europe(self) -> None:
+        assert Settings(_env_file=None).download.proton_countries == ("nl", "pl", "ro")

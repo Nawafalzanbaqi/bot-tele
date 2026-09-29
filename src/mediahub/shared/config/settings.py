@@ -23,6 +23,7 @@ the container that received them, never by constructing ``Settings()`` ad hoc.
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -37,7 +38,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 INSECURE_DEFAULTS: Final[frozenset[str]] = frozenset(
     {"change-me", "change-me-in-production", "secret", "mediahub", "postgres"}
@@ -417,7 +418,7 @@ class DownloadSettings(_ConfigSection):
     user_agent: str | None = None
     cookies_file: Path | None = None
     proxy: str | None = None
-    proxy_hosts: tuple[str, ...] = ()
+    proxy_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     egress_hosts_file: Path | None = None
     # Third egress tier: one free ProtonVPN tunnel (a second gluetun), whose
     # exit country the bot moves through gluetun's control server. All three
@@ -426,7 +427,7 @@ class DownloadSettings(_ConfigSection):
     proton_proxy: str | None = None
     proton_control_url: str | None = None
     proton_control_key: SecretStr | None = None
-    proton_countries: tuple[str, ...] = ("nl", "pl", "ro")
+    proton_countries: Annotated[tuple[str, ...], NoDecode] = ("nl", "pl", "ro")
     verify_streams: bool = True
     ffprobe_path: str = Field(default="ffprobe", min_length=1)
     images_enabled: bool = True
@@ -437,7 +438,7 @@ class DownloadSettings(_ConfigSection):
     # listed below, which fingerprint the TLS handshake regardless of address.
     # None disables it everywhere.
     impersonate: str | None = "chrome"
-    impersonate_hosts: tuple[str, ...] = (
+    impersonate_hosts: Annotated[tuple[str, ...], NoDecode] = (
         "tiktok.com",
         "instagram.com",
         "facebook.com",
@@ -453,9 +454,21 @@ class DownloadSettings(_ConfigSection):
         setting here, and ``["a.com","b.com"]`` is an unkind thing to ask
         someone to type correctly at a shell prompt.
         """
-        if isinstance(value, str):
-            return [part.strip().lower().lstrip(".") for part in value.split(",") if part.strip()]
-        return value
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            # JSON is still accepted; NoDecode above only stops the settings
+            # source from insisting on it before this validator runs.
+            try:
+                items = json.loads(text)
+            except json.JSONDecodeError:
+                items = None
+            if isinstance(items, list):
+                return [
+                    str(item).strip().lower().lstrip(".") for item in items if str(item).strip()
+                ]
+        return [part.strip().lower().lstrip(".") for part in text.split(",") if part.strip()]
 
 
 class WorkerSettings(_ConfigSection):

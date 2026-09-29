@@ -79,7 +79,8 @@ services:
       # mounted into vpn-proton. Leave the key unset to keep two tiers.
       MEDIAHUB_DOWNLOAD__PROTON_PROXY: http://vpn-proton:8888
       MEDIAHUB_DOWNLOAD__PROTON_CONTROL_URL: http://vpn-proton:8000
-      MEDIAHUB_DOWNLOAD__PROTON_COUNTRIES: ${PROTON_COUNTRIES:-nl,pl,ro}
+      # Country order is the setting's default (nl, pl, ro); override in .env as
+      # MEDIAHUB_DOWNLOAD__PROTON_COUNTRIES=nl,pl,ro once the comma form is accepted.
     volumes:
       - data:/data
       # The cookie jar, and deliberately **writable**.
