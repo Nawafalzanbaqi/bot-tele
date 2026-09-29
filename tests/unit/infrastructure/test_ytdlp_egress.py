@@ -7,6 +7,7 @@ says which path actually worked.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -129,6 +130,108 @@ class TestWhatEscalates:
             await downloader(settings(), factory).probe(URL)
 
         assert [options.get("proxy") for options in attempts] == [None]
+
+
+class TestTheLessonIsKept:
+    """A host that needed the egress yesterday goes through it today, first try."""
+
+    async def test_an_escalated_host_is_written_to_the_file(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        factory, attempts = failing_directly(RuntimeError("[Errno 104] Connection reset by peer"))
+
+        await downloader(settings(egress_hosts_file=hosts_file), factory).probe(URL)
+
+        assert [options.get("proxy") for options in attempts] == [None, PROXY]
+        assert hosts_file.exists()
+        assert "example.com" in _hosts_in(hosts_file)
+        assert hosts_file.read_text(encoding="utf-8").startswith("# Hosts the download engine")
+
+    async def test_the_next_process_goes_through_the_egress_first(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("example.com\n", encoding="utf-8")
+        factory, attempts = failing_directly(RuntimeError("would have been reset"))
+
+        metadata = await downloader(settings(egress_hosts_file=hosts_file), factory).probe(URL)
+
+        assert metadata.title == "A Test Video"
+        assert [options.get("proxy") for options in attempts] == [PROXY], "no direct attempt"
+
+    def test_a_hand_edit_is_picked_up_without_a_restart(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("a.example\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file)
+        assert policy.for_host("a.example") == PROXY
+        assert policy.for_host("b.example") is None
+
+        _rewrite(hosts_file, "# a.example removed on purpose\n.B.EXAMPLE  # added\n\n")
+
+        assert policy.for_host("a.example") is None, "the removed line lets it go direct again"
+        assert policy.for_host("b.example") == PROXY, "case, dots and comments are tolerated"
+        assert policy.for_host("cdn.b.example") == PROXY, "subdomains are covered"
+
+    def test_deleting_the_file_forgets_everything(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("a.example\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file)
+        assert policy.for_host("a.example") == PROXY
+
+        hosts_file.unlink()
+
+        assert policy.for_host("a.example") is None
+        assert policy.learned_hosts == ()
+
+    def test_configured_and_learned_hosts_are_both_listed(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("learned.example\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, ["Configured.example"], learned_file=hosts_file)
+
+        assert policy.routed() == ("configured.example", "learned.example")
+
+    def test_pin_routes_a_host_and_says_whether_it_was_new(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        policy = ProxyPolicy(PROXY, ["configured.example"], learned_file=hosts_file)
+
+        assert policy.pin("New.Example") is True
+        assert policy.pin("new.example") is False, "already routed"
+        assert policy.pin("cdn.configured.example") is False, "covered by a configured parent"
+        assert policy.for_host("new.example") == PROXY
+        assert "new.example" in _hosts_in(hosts_file)
+
+    def test_pin_without_an_egress_does_nothing(self) -> None:
+        policy = ProxyPolicy(None)
+
+        assert policy.pin("a.example") is False
+        assert policy.routed() == ()
+
+    def test_an_unwritable_file_keeps_the_lesson_for_this_process(self, tmp_path: Path) -> None:
+        """A read-only volume must not turn a successful escalation into a crash."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=blocker / "egress-hosts.txt")
+
+        assert policy.escalate("a.example") == PROXY
+        assert policy.for_host("a.example") == PROXY
+
+    def test_without_a_file_nothing_is_written(self, tmp_path: Path) -> None:
+        policy = ProxyPolicy(PROXY)
+
+        assert policy.escalate("a.example") == PROXY
+        assert list(tmp_path.iterdir()) == []
+
+
+def _hosts_in(path: Path) -> set[str]:
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def _rewrite(path: Path, text: str) -> None:
+    """Rewrite a file with a modification time that is certainly different."""
+    previous = path.stat().st_mtime_ns
+    path.write_text(text, encoding="utf-8")
+    os.utime(path, ns=(previous + 2_000_000_000, previous + 2_000_000_000))
 
 
 class TestImpersonation:

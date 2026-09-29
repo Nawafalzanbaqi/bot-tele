@@ -70,6 +70,9 @@ services:
       # Touched by the poll loop after every successful long-poll; the
       # healthcheck below watches its age. See TelegramSettings.heartbeat_file.
       MEDIAHUB_TELEGRAM__HEARTBEAT_FILE: /data/telegram-heartbeat
+      # Hosts that needed the egress, kept across restarts and hand-editable
+      # (one per line). On the host: the mediahub_data volume, egress-hosts.txt.
+      MEDIAHUB_DOWNLOAD__EGRESS_HOSTS_FILE: /data/egress-hosts.txt
     volumes:
       - data:/data
       # The cookie jar, and deliberately **writable**.

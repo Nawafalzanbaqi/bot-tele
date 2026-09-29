@@ -350,6 +350,12 @@ class DownloadSettings(_ConfigSection):
             the hostname. No cookie, retry or engine update changes that,
             because the traffic never reaches the site. Sending it through a
             proxy on the far side of the filter is what changes it.
+        egress_hosts_file: Where hosts that turned out to need ``proxy`` are
+            kept between restarts, one per line, so the next request to such a
+            host goes through the egress on the first attempt instead of paying
+            the failed direct connection again. The bot re-reads the file when
+            it changes, so a line can be removed to try a host directly again.
+            ``None`` keeps the memory per-process.
         verify_streams: Look inside every finished file with ``ffprobe`` before
             it is delivered, and refuse one with no decodable stream, without
             the video stream that was asked for, or materially shorter than the
@@ -402,6 +408,7 @@ class DownloadSettings(_ConfigSection):
     cookies_file: Path | None = None
     proxy: str | None = None
     proxy_hosts: tuple[str, ...] = ()
+    egress_hosts_file: Path | None = None
     verify_streams: bool = True
     ffprobe_path: str = Field(default="ffprobe", min_length=1)
     images_enabled: bool = True

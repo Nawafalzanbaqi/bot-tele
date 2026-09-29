@@ -72,6 +72,7 @@ from mediahub.infrastructure.download.ytdlp.progress import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from pathlib import Path
 
     from mediahub.application.common.cancellation import CancellationToken
     from mediahub.application.download.ports import (
@@ -126,14 +127,25 @@ class ProxyPolicy:
     a different egress can cure. When it happens the host is remembered, so the
     cost of learning is a single fast failure, paid once.
 
-    Memory is per-process and deliberately not persisted. What a network blocks
-    changes, and a stale list would keep sending traffic down a slow tunnel long
-    after the direct route started working again. A restart re-learns in one
-    attempt. ``proxy_hosts`` exists for the operator who would rather not pay
-    even that.
+    What is learned is kept in a plain text file when one is configured, so a
+    restart does not pay the failed direct attempt again for a host that was
+    refused yesterday. The file is the operator's too: one host per line,
+    comments allowed, re-read whenever it changes, so a line can be removed to
+    try a host directly again without restarting anything. Without a file the
+    memory is per-process, as before. ``proxy_hosts`` in the settings is the
+    static half of the same list.
     """
 
-    __slots__ = ("_impersonate", "_impersonate_hosts", "_learned", "_listed", "_lock", "_proxy")
+    __slots__ = (
+        "_file",
+        "_file_mtime",
+        "_impersonate",
+        "_impersonate_hosts",
+        "_learned",
+        "_listed",
+        "_lock",
+        "_proxy",
+    )
 
     def __init__(
         self,
@@ -142,6 +154,7 @@ class ProxyPolicy:
         *,
         impersonate: str | None = None,
         impersonate_hosts: Sequence[str] = (),
+        learned_file: Path | None = None,
     ) -> None:
         """Bind the policy to an egress, the hosts known to need it, and a browser fingerprint.
 
@@ -153,6 +166,9 @@ class ProxyPolicy:
                 never impersonate.
             impersonate_hosts: Hosts that fingerprint the TLS handshake and so
                 need the browser fingerprint even on the direct path.
+            learned_file: Where hosts that turned out to need the egress are
+                kept between processes, and where the operator edits them.
+                ``None`` keeps the memory per-process.
         """
         self._proxy = proxy or None
         self._listed = frozenset(host.lower().lstrip(".") for host in hosts if host)
@@ -164,6 +180,9 @@ class ProxyPolicy:
         # Probes and fetches run on engine threads; the set is written from
         # whichever one first meets a reset.
         self._lock = threading.Lock()
+        self._file = learned_file
+        self._file_mtime: int | None = None
+        self._load()
 
     @property
     def is_configured(self) -> bool:
@@ -174,6 +193,7 @@ class ProxyPolicy:
         """Return the egress this host should use, or ``None`` for direct."""
         if self._proxy is None:
             return None
+        self._reload_if_edited()
         lowered = host.lower()
         with self._lock:
             known = self._listed | self._learned
@@ -202,23 +222,136 @@ class ProxyPolicy:
         """
         if self._proxy is None or self.for_host(host) is not None:
             return None
-        with self._lock:
-            self._learned.add(host.lower())
+        self._remember(host)
         logger.bind(host=host).info(
             "Direct connection to this host was reset; routing it through the egress proxy"
         )
         return self._proxy
 
+    def pin(self, host: str) -> bool:
+        """Route ``host`` through the egress from now on, at the operator's request.
+
+        Returns whether that was new. A host already routed - configured,
+        learned, or a parent domain of either - is left as it is.
+        """
+        if self._proxy is None:
+            return False
+        if self.for_host(host) is not None:
+            return False
+        self._remember(host)
+        logger.bind(host=host).info("Host pinned to the egress proxy")
+        return True
+
+    def routed(self) -> tuple[str, ...]:
+        """Return every host routed through the egress: configured and learned, sorted."""
+        self._reload_if_edited()
+        with self._lock:
+            return tuple(sorted(self._listed | self._learned))
+
     @property
     def learned_hosts(self) -> tuple[str, ...]:
         """Return the hosts discovered to need the egress. Diagnostic helper."""
+        self._reload_if_edited()
         with self._lock:
             return tuple(sorted(self._learned))
+
+    # -- The file ------------------------------------------------------------
+
+    def _remember(self, host: str) -> None:
+        """Add a host to the learned set and write the set out."""
+        with self._lock:
+            self._learned.add(host.lower().lstrip("."))
+        self._save()
+
+    def _load(self) -> None:
+        """Read the learned hosts from the file, if there is one."""
+        if self._file is None:
+            return
+        try:
+            stat = self._file.stat()
+        except FileNotFoundError:
+            with self._lock:
+                self._learned = set()
+                self._file_mtime = None
+            return
+        except OSError:
+            logger.opt(exception=True).warning("Could not read the egress host list")
+            return
+        try:
+            text = self._file.read_text(encoding="utf-8")
+        except OSError:
+            logger.opt(exception=True).warning("Could not read the egress host list")
+            return
+        hosts = _parse_host_list(text)
+        with self._lock:
+            self._learned = hosts
+            self._file_mtime = stat.st_mtime_ns
+        logger.bind(count=len(hosts)).debug("Egress host list loaded")
+
+    def _reload_if_edited(self) -> None:
+        """Pick up a hand edit - or a deletion - without a restart.
+
+        One ``stat`` per request. The file is the operator's control surface:
+        removing a line must let that host be tried directly again, and
+        removing the file must forget everything, both while the bot runs.
+        """
+        if self._file is None:
+            return
+        try:
+            mtime: int | None = self._file.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime = None
+        except OSError:
+            return
+        with self._lock:
+            unchanged = mtime == self._file_mtime
+        if unchanged:
+            return
+        self._load()
+
+    def _save(self) -> None:
+        """Write the learned hosts out atomically. A failure is logged, never raised."""
+        if self._file is None:
+            return
+        with self._lock:
+            hosts = sorted(self._learned)
+        body = _HOST_LIST_HEADER + "".join(f"{host}\n" for host in hosts)
+        try:
+            self._file.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._file.with_name(self._file.name + ".tmp")
+            temporary.write_text(body, encoding="utf-8")
+            temporary.replace(self._file)
+            with self._lock:
+                self._file_mtime = self._file.stat().st_mtime_ns
+        except OSError:
+            logger.opt(exception=True).warning(
+                "Could not write the egress host list; the lesson is kept for this process only"
+            )
 
 
 def _matches(host: str, names: frozenset[str]) -> bool:
     """Return whether ``host`` is one of ``names`` or a subdomain of one."""
     return any(host == name or host.endswith(f".{name}") for name in names)
+
+
+_HOST_LIST_HEADER: Final[str] = (
+    "# Hosts the download engine sends through the egress proxy (WARP) on the first attempt.\n"
+    "# One host per line; subdomains are covered; '#' starts a comment.\n"
+    "# A line is added when a direct connection is refused in a way that names the address\n"
+    "# (reset, 403, geo-fence, bot wall), or by /vpn <link>. The running bot re-reads this file\n"
+    "# whenever it changes: delete a line to try that host directly again, delete the file to\n"
+    "# forget all of them. MEDIAHUB_DOWNLOAD__PROXY_HOSTS in .env is the static half of the list.\n"
+)
+
+
+def _parse_host_list(text: str) -> set[str]:
+    """Return the hosts named in a host-list file, ignoring comments and blanks."""
+    hosts: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", maxsplit=1)[0].strip().lower().lstrip(".")
+        if line:
+            hosts.add(line)
+    return hosts
 
 
 _ESCALATION_SIGNATURES: Final[tuple[str, ...]] = (
@@ -443,7 +576,13 @@ class YtDlpDownloader:
             settings.proxy_hosts,
             impersonate=settings.impersonate,
             impersonate_hosts=settings.impersonate_hosts,
+            learned_file=settings.egress_hosts_file,
         )
+
+    @property
+    def proxy_policy(self) -> ProxyPolicy:
+        """Return the egress policy, so the operator's surface can pin and list hosts."""
+        return self._proxy_policy
 
     # -- Port surface --------------------------------------------------------
 
