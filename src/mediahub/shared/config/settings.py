@@ -356,6 +356,16 @@ class DownloadSettings(_ConfigSection):
             the failed direct connection again. The bot re-reads the file when
             it changes, so a line can be removed to try a host directly again.
             ``None`` keeps the memory per-process.
+        proton_proxy: The HTTP proxy of the ProtonVPN tunnel, the third egress
+            tier, e.g. ``http://vpn-proton:8888``. Asked only when a site
+            answers through the second tier with "removed", "geo-blocked" or
+            "unavailable", and by ``/vpn <country> <link>``.
+        proton_control_url: gluetun's control server for that tunnel, e.g.
+            ``http://vpn-proton:8000``; the bot moves the exit country there.
+        proton_control_key: The API key the control server's roles file grants
+            the bot. Never logged.
+        proton_countries: Country codes to try, in order (``nl``, ``pl``,
+            ``ro`` - what the free tier offers in Europe). Comma-separated.
         verify_streams: Look inside every finished file with ``ffprobe`` before
             it is delivered, and refuse one with no decodable stream, without
             the video stream that was asked for, or materially shorter than the
@@ -409,6 +419,14 @@ class DownloadSettings(_ConfigSection):
     proxy: str | None = None
     proxy_hosts: tuple[str, ...] = ()
     egress_hosts_file: Path | None = None
+    # Third egress tier: one free ProtonVPN tunnel (a second gluetun), whose
+    # exit country the bot moves through gluetun's control server. All three
+    # must be set for the tier to exist; the key is the control server's
+    # API key from the roles file mounted into that container.
+    proton_proxy: str | None = None
+    proton_control_url: str | None = None
+    proton_control_key: SecretStr | None = None
+    proton_countries: tuple[str, ...] = ("nl", "pl", "ro")
     verify_streams: bool = True
     ffprobe_path: str = Field(default="ffprobe", min_length=1)
     images_enabled: bool = True
@@ -426,7 +444,7 @@ class DownloadSettings(_ConfigSection):
         "dailymotion.com",
     )
 
-    @field_validator("proxy_hosts", "impersonate_hosts", mode="before")
+    @field_validator("proxy_hosts", "impersonate_hosts", "proton_countries", mode="before")
     @classmethod
     def _split_hosts(cls, value: object) -> object:
         """Accept a comma-separated list, not only JSON.

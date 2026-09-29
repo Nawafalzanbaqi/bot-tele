@@ -72,6 +72,7 @@ from mediahub.infrastructure.delivery.registry import (
 )
 from mediahub.infrastructure.download.composite import CompositeDownloader
 from mediahub.infrastructure.download.gallerydl.downloader import GalleryDlDownloader
+from mediahub.infrastructure.download.shared.proton import ProtonEgress, UrllibControl
 from mediahub.infrastructure.download.ytdlp.downloader import (
     YtDlpDownloader,
     engine_thread_stats,
@@ -107,7 +108,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.download.ports import DownloaderPort, EgressRoutes
     from mediahub.application.download.queue import JobQueue
     from mediahub.application.workspace.ports import WorkspacePort
-    from mediahub.shared.config.settings import Settings
+    from mediahub.shared.config.settings import DownloadSettings, Settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +611,18 @@ def _build_workspace(settings: Settings, clock: Clock) -> FilesystemWorkspace | 
     return workspace
 
 
+def _build_proton(download: DownloadSettings) -> ProtonEgress | None:
+    """Return the third egress tier when all three of its settings are present."""
+    if not (download.proton_proxy and download.proton_control_url and download.proton_control_key):
+        return None
+    control = UrllibControl(
+        download.proton_control_url, download.proton_control_key.get_secret_value()
+    )
+    return ProtonEgress(
+        proxy=download.proton_proxy, control=control, countries=download.proton_countries
+    )
+
+
 def _build_allow_list(settings: Settings) -> AllowListPolicy:
     """Turn the configured Telegram id lists into an access policy.
 
@@ -642,6 +655,7 @@ def _build_downloader(settings: Settings) -> tuple[DownloaderPort, EgressRoutes 
         settings.download,
         url_policy=policy,
         address_guard=guard,
+        proton=_build_proton(settings.download),
         inspector=(
             FfprobeInspector(settings.download.ffprobe_path)
             if settings.download.verify_streams
