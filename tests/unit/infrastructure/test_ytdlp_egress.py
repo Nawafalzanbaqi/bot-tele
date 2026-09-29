@@ -7,6 +7,7 @@ says which path actually worked.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +16,9 @@ import pytest
 from mediahub.application.download.errors import (
     AuthenticationRequiredError,
     ContentRemovedError,
+    GeoRestrictedError,
     MetadataUnavailableError,
+    ProviderError,
 )
 from mediahub.application.download.ports import DownloadRequest, FormatSelection
 from mediahub.domain.sources.policies import UrlPolicy
@@ -26,7 +29,7 @@ from mediahub.shared.config.settings import DownloadSettings
 from tests.support.ytdlp_fakes import FakeYoutubeDL, video_info, writes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from mediahub.application.workspace.ports import WorkspaceScope
@@ -185,7 +188,7 @@ class TestTheLessonIsKept:
         hosts_file.write_text("learned.example\n", encoding="utf-8")
         policy = ProxyPolicy(PROXY, ["Configured.example"], learned_file=hosts_file)
 
-        assert policy.routed() == ("configured.example", "learned.example")
+        assert policy.routed() == (("configured.example", "warp"), ("learned.example", "warp"))
 
     def test_pin_routes_a_host_and_says_whether_it_was_new(self, tmp_path: Path) -> None:
         hosts_file = tmp_path / "egress-hosts.txt"
@@ -196,6 +199,276 @@ class TestTheLessonIsKept:
         assert policy.pin("cdn.configured.example") is False, "covered by a configured parent"
         assert policy.for_host("new.example") == PROXY
         assert "new.example" in _hosts_in(hosts_file)
+
+
+class TestTiersInTheFile:
+    """A line names a host, and optionally the tier it goes through."""
+
+    def test_a_proton_line_routes_to_that_country(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("a.example proton:nl\nb.example\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, proton_countries=("nl", "pl"))
+
+        assert policy.route_for("a.example") == ("proton", "nl")
+        assert policy.route_for("cdn.a.example") == ("proton", "nl")
+        assert policy.route_for("b.example") == ("warp", None)
+        assert policy.route_for("c.example") == ("direct", None)
+        assert policy.for_host("a.example") is None, "the second-tier proxy is not for it"
+        assert policy.routed() == (("a.example", "proton:nl"), ("b.example", "warp"))
+
+    def test_a_garbled_tier_falls_back_to_warp(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("a.example protn:xx\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file)
+
+        assert policy.route_for("a.example") == ("warp", None)
+
+    def test_learning_a_proton_country_is_written_with_its_tier(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, proton_countries=("nl", "pl", "ro"))
+
+        policy.learn_proton("Blocked.Example", "pl")
+
+        assert "blocked.example proton:pl" in hosts_file.read_text(encoding="utf-8")
+        assert ProxyPolicy(PROXY, learned_file=hosts_file, proton_countries=("pl",)).route_for(
+            "blocked.example"
+        ) == ("proton", "pl")
+
+    def test_pin_accepts_a_tier_and_moves_a_host_between_tiers(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, proton_countries=("nl", "pl"))
+
+        assert policy.pin("a.example", "proton:nl") is True
+        assert policy.pin("a.example", "proton:nl") is False
+        assert policy.pin("a.example", "warp") is True, "moved back to the second tier"
+        assert policy.route_for("a.example") == ("warp", None)
+        with pytest.raises(ValueError, match="not an egress tier"):
+            policy.pin("a.example", "proton:xx")
+
+    def test_the_closest_parent_wins(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("example proton:ro\nvideo.example\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, proton_countries=("ro",))
+
+        assert policy.route_for("cdn.video.example") == ("warp", None)
+        assert policy.route_for("other.example") == ("proton", "ro")
+
+
+class FakeProton:
+    """A third tier whose exit is a distinct proxy URL per country, and which records holds."""
+
+    def __init__(
+        self,
+        countries: tuple[str, ...] = ("nl", "pl", "ro"),
+        *,
+        broken: frozenset[str] = frozenset(),
+    ) -> None:
+        self.countries = countries
+        self.holds: list[str] = []
+        self.broken = set(broken)
+
+    @contextlib.asynccontextmanager
+    async def hold(self, code: str) -> AsyncIterator[str]:
+        self.holds.append(code)
+        if code in self.broken:
+            message = f"the ProtonVPN tunnel did not reach {code}"
+            raise ProviderError(message, provider="protonvpn")
+        yield f"http://proton-{code}:8888"
+
+
+def scripted(
+    outcomes: Mapping[str | None, BaseException | None],
+) -> tuple[Callable[[Mapping[str, Any]], FakeYoutubeDL], list[str | None]]:
+    """Return a factory that fails or succeeds per proxy, and the proxies it saw."""
+    seen: list[str | None] = []
+
+    def factory(options: Mapping[str, Any]) -> FakeYoutubeDL:
+        proxy = options.get("proxy")
+        seen.append(proxy)
+        outcome = outcomes.get(proxy, RuntimeError("unexpected proxy " + str(proxy)))
+        return FakeYoutubeDL(options, info=None if outcome else video_info(), error=outcome)
+
+    return factory, seen
+
+
+def third_tier(
+    config: DownloadSettings, factory: Callable[..., FakeYoutubeDL], proton: FakeProton
+) -> YtDlpDownloader:
+    return YtDlpDownloader(
+        config,
+        url_policy=UrlPolicy(),
+        address_guard=None,
+        youtube_dl_factory=factory,
+        proton=proton,
+    )
+
+
+REMOVED = "This video has been removed"
+GEO = "The uploader has not made this video available in your country"
+PRIVATE = "This video is private"
+RESET = "[Errno 104] Connection reset by peer"
+
+
+class TestTheThirdTier:
+    """Direct, then WARP, then ProtonVPN by country - and only for what a country can change."""
+
+    async def test_removed_through_warp_is_retried_from_the_netherlands(
+        self, tmp_path: Path
+    ) -> None:
+        factory, seen = scripted(
+            {None: RuntimeError(RESET), PROXY: RuntimeError(REMOVED), "http://proton-nl:8888": None}
+        )
+        proton = FakeProton()
+        hosts_file = tmp_path / "hosts.txt"
+
+        metadata = await third_tier(settings(egress_hosts_file=hosts_file), factory, proton).probe(
+            URL
+        )
+
+        assert metadata.title == "A Test Video"
+        assert seen == [None, PROXY, "http://proton-nl:8888"]
+        assert proton.holds == ["nl"]
+        assert "example.com proton:nl" in hosts_file.read_text(encoding="utf-8")
+
+    async def test_countries_are_tried_in_order_until_one_answers(self) -> None:
+        factory, seen = scripted(
+            {
+                None: RuntimeError(RESET),
+                PROXY: RuntimeError(GEO),
+                "http://proton-nl:8888": RuntimeError(REMOVED),
+                "http://proton-pl:8888": RuntimeError(GEO),
+                "http://proton-ro:8888": None,
+            }
+        )
+        proton = FakeProton()
+
+        await third_tier(settings(), factory, proton).probe(URL)
+
+        assert proton.holds == ["nl", "pl", "ro"]
+        assert seen[-1] == "http://proton-ro:8888"
+
+    async def test_when_no_country_answers_the_last_answer_is_reported(self) -> None:
+        factory, seen = scripted(
+            {
+                None: RuntimeError(RESET),
+                PROXY: RuntimeError(REMOVED),
+                "http://proton-nl:8888": RuntimeError(REMOVED),
+                "http://proton-pl:8888": RuntimeError(REMOVED),
+                "http://proton-ro:8888": RuntimeError(GEO),
+            }
+        )
+        proton = FakeProton()
+
+        with pytest.raises(GeoRestrictedError):
+            await third_tier(settings(), factory, proton).probe(URL)
+
+        assert seen.count(None) == 1, "the direct path was tried once and never again"
+
+    async def test_a_private_video_gets_no_third_attempt(self) -> None:
+        factory, seen = scripted({None: RuntimeError(RESET), PROXY: RuntimeError(PRIVATE)})
+        proton = FakeProton()
+
+        with pytest.raises(MetadataUnavailableError):
+            await third_tier(settings(), factory, proton).probe(URL)
+
+        assert proton.holds == []
+        assert seen == [None, PROXY]
+
+    async def test_a_private_answer_from_a_country_stops_the_search(self) -> None:
+        factory, _seen = scripted(
+            {
+                None: RuntimeError(RESET),
+                PROXY: RuntimeError(REMOVED),
+                "http://proton-nl:8888": RuntimeError(PRIVATE),
+            }
+        )
+        proton = FakeProton()
+
+        with pytest.raises(MetadataUnavailableError):
+            await third_tier(settings(), factory, proton).probe(URL)
+
+        assert proton.holds == ["nl"], "Poland and Romania were not asked about a private video"
+
+    async def test_removed_on_the_direct_path_goes_straight_to_the_third_tier(self) -> None:
+        """No reset, so no WARP; but 'removed' is a third-tier answer."""
+        factory, seen = scripted({None: RuntimeError(REMOVED), "http://proton-nl:8888": None})
+        proton = FakeProton()
+
+        await third_tier(settings(), factory, proton).probe(URL)
+
+        assert seen == [None, "http://proton-nl:8888"]
+
+    async def test_a_learned_host_goes_to_its_country_first(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "hosts.txt"
+        hosts_file.write_text("example.com proton:pl\n", encoding="utf-8")
+        factory, seen = scripted({"http://proton-pl:8888": None})
+        proton = FakeProton()
+
+        await third_tier(settings(egress_hosts_file=hosts_file), factory, proton).probe(URL)
+
+        assert seen == ["http://proton-pl:8888"], "neither direct nor WARP was tried"
+        assert proton.holds == ["pl"]
+
+    async def test_a_learned_host_whose_country_stopped_working_tries_the_others(
+        self, tmp_path: Path
+    ) -> None:
+        hosts_file = tmp_path / "hosts.txt"
+        hosts_file.write_text("example.com proton:pl\n", encoding="utf-8")
+        factory, seen = scripted(
+            {"http://proton-pl:8888": RuntimeError(REMOVED), "http://proton-nl:8888": None}
+        )
+        proton = FakeProton()
+
+        await third_tier(settings(egress_hosts_file=hosts_file), factory, proton).probe(URL)
+
+        assert proton.holds == ["pl", "nl"]
+        assert seen == ["http://proton-pl:8888", "http://proton-nl:8888"]
+        assert "example.com proton:nl" in hosts_file.read_text(encoding="utf-8")
+
+    async def test_a_tunnel_that_cannot_reach_a_country_moves_on_and_never_goes_direct(
+        self,
+    ) -> None:
+        """The kill switch: a broken exit is skipped, and the direct path is not a fallback."""
+        factory, seen = scripted(
+            {None: RuntimeError(RESET), PROXY: RuntimeError(REMOVED), "http://proton-pl:8888": None}
+        )
+        proton = FakeProton(broken=frozenset({"nl"}))
+
+        await third_tier(settings(), factory, proton).probe(URL)
+
+        assert proton.holds == ["nl", "pl"]
+        assert seen == [None, PROXY, "http://proton-pl:8888"]
+
+    async def test_all_exits_broken_is_reported_as_the_tunnel_not_the_video(self) -> None:
+        factory, seen = scripted({None: RuntimeError(RESET), PROXY: RuntimeError(REMOVED)})
+        proton = FakeProton(broken=frozenset({"nl", "pl", "ro"}))
+
+        with pytest.raises(ProviderError, match="did not reach"):
+            await third_tier(settings(), factory, proton).probe(URL)
+
+        assert seen.count(None) == 1
+
+    async def test_without_a_third_tier_removed_is_final(self) -> None:
+        factory, seen = scripted({None: RuntimeError(RESET), PROXY: RuntimeError(REMOVED)})
+
+        with pytest.raises(ContentRemovedError):
+            await downloader(settings(), factory).probe(URL)
+
+        assert seen == [None, PROXY]
+
+    async def test_a_fetch_through_proton_says_so(self, scope: WorkspaceScope) -> None:
+        def factory(options: Mapping[str, Any]) -> FakeYoutubeDL:
+            proxy = options.get("proxy")
+            if proxy == "http://proton-nl:8888":
+                return FakeYoutubeDL(options, info=video_info(), script=writes("abc123.mp4", 2048))
+            return FakeYoutubeDL(options, error=RuntimeError(RESET if proxy is None else REMOVED))
+
+        result = await third_tier(settings(), factory, FakeProton()).fetch(
+            DownloadRequest(url=URL, selection=FormatSelection.best()), scope
+        )
+
+        assert result.via_proxy is True
+        assert result.egress == "proton:nl"
 
     def test_pin_without_an_egress_does_nothing(self) -> None:
         policy = ProxyPolicy(None)

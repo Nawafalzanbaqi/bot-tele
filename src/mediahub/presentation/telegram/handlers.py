@@ -268,20 +268,30 @@ class TelegramHandlers:
             return
         argument = (intent.argument or "").strip()
         if not argument:
-            await self._say(intent, formatters.render_vpn_routes(egress.routed()))
+            await self._say(
+                intent, formatters.render_vpn_routes(egress.routed(), egress.proton_countries)
+            )
             return
+        tier = "warp"
+        head, _, rest = argument.partition(" ")
+        if head.lower() in _PROTON_CODES:
+            # "/vpn nl <link>": a named country of the third tier.
+            if head.lower() not in egress.proton_countries:
+                await self._say(intent, formatters.render_vpn_no_proton())
+                return
+            tier, argument = f"proton:{head.lower()}", rest.strip()
         if not argument.lower().startswith(URL_PREFIXES):
             await self._say(intent, formatters.render_help())
             return
 
         host = _host_of(argument)
-        pinned = egress.pin(host)
-        logger.bind(host=host, new=pinned, actor=principal.identity).info(
-            "Host pinned to the egress by /vpn"
+        pinned = egress.pin(host, tier)
+        logger.bind(host=host, tier=tier, new=pinned, actor=principal.identity).info(
+            "Host pinned to an egress tier by /vpn"
         )
-        await self._say(intent, formatters.render_vpn_pinned(host, already=not pinned))
+        await self._say(intent, formatters.render_vpn_pinned(host, already=not pinned, tier=tier))
         # From here it is an ordinary link: probe, offer or auto-fetch. The
-        # policy now routes its host through the egress on the first attempt.
+        # policy now routes its host through that tier on the first attempt.
         await self._on_text(
             replace(intent, kind=IntentKind.TEXT, text=argument, command=None, argument=None),
             principal,
@@ -611,6 +621,10 @@ class TelegramHandlers:
                 return
             await self._services.messenger.send_message(chat_id=intent.chat_id, text=text)
 
+
+_PROTON_CODES: Final[frozenset[str]] = frozenset({"nl", "pl", "ro"})
+"""Country words ``/vpn`` understands ahead of a link. Which of them exist is the
+egress's to say; this only decides how the argument is read."""
 
 COMMAND_ACTIONS: Final[dict[str, Action]] = {
     "history": Action.VIEW_HISTORY,

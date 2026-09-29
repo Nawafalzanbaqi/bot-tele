@@ -235,25 +235,34 @@ class FakeEgress:
     """Stands in for the engine's egress routes."""
 
     def __init__(
-        self, *, configured: bool = True, routed: tuple[str, ...] = ("blocked.example",)
+        self,
+        *,
+        configured: bool = True,
+        routed: tuple[str, ...] = ("blocked.example",),
+        proton: tuple[str, ...] = (),
     ) -> None:
         self.configured = configured
-        self._routed = list(routed)
-        self.pinned: list[str] = []
+        self._routed: dict[str, str] = dict.fromkeys(routed, "warp")
+        self.pinned: list[tuple[str, str]] = []
+        self.proton = proton
 
     @property
     def is_configured(self) -> bool:
         return self.configured
 
-    def pin(self, host: str) -> bool:
-        self.pinned.append(host)
-        if host in self._routed:
+    @property
+    def proton_countries(self) -> tuple[str, ...]:
+        return self.proton
+
+    def pin(self, host: str, tier: str = "warp") -> bool:
+        self.pinned.append((host, tier))
+        if self._routed.get(host) == tier:
             return False
-        self._routed.append(host)
+        self._routed[host] = tier
         return True
 
-    def routed(self) -> tuple[str, ...]:
-        return tuple(sorted(self._routed))
+    def routed(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self._routed.items()))
 
 
 def build(
@@ -739,10 +748,10 @@ class TestVpnCommand:
 
         await handle(handlers, message_update("/vpn https://Video.Example.com/watch?v=1"))
 
-        assert egress.pinned == ["video.example.com"], "pinned by host, lower-cased"
+        assert egress.pinned == [("video.example.com", "warp")], "pinned by host, lower-cased"
         assert probe.calls == ["https://Video.Example.com/watch?v=1"], "then probed as usual"
         assert "video.example.com" in messenger.sent[0].text
-        assert "عبر النفق" in messenger.sent[0].text
+        assert "عبر WARP" in messenger.sent[0].text
         assert "اختر الجودة" in messenger.sent[1].text, "the ordinary source card follows"
 
     async def test_a_host_already_routed_is_said_to_be(self) -> None:
@@ -753,7 +762,7 @@ class TestVpnCommand:
         await handle(handlers, message_update("/vpn https://example.com/a"))
 
         assert "أصلًا" in messenger.sent[0].text
-        assert egress.routed() == ("example.com",)
+        assert egress.routed() == (("example.com", "warp"),)
 
     async def test_without_a_link_the_routes_are_listed(self) -> None:
         messenger = FakeMessenger()
@@ -765,7 +774,7 @@ class TestVpnCommand:
         await handle(handlers, message_update("/vpn"))
 
         text = messenger.sent[0].text
-        assert "• a.example\n• b.example" in text
+        assert "• a.example — WARP\n• b.example — WARP" in text
         assert "ملف" in text, "says the list lives in an editable file"
         assert probe.calls == []
 
@@ -808,6 +817,54 @@ class TestVpnCommand:
     def test_vpn_is_a_source_submission_for_access_purposes(self) -> None:
         assert COMMAND_ACTIONS["vpn"] is Action.SUBMIT_SOURCE
         assert "/vpn" in formatters.render_help()
+
+
+class TestVpnCountry:
+    async def test_a_country_word_pins_the_host_to_that_proton_exit(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress(proton=("nl", "pl", "ro"))
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe, egress=egress)
+
+        await handle(handlers, message_update("/vpn NL https://example.com/a"))
+
+        assert egress.pinned == [("example.com", "proton:nl")]
+        assert probe.calls == ["https://example.com/a"]
+        assert "Proton" in messenger.sent[0].text
+        assert "هولندا" in messenger.sent[0].text
+
+    async def test_a_country_without_the_third_tier_is_refused_clearly(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress()
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe, egress=egress)
+
+        await handle(handlers, message_update("/vpn pl https://example.com/a"))
+
+        assert "Proton" in messenger.sent[0].text
+        assert egress.pinned == []
+        assert probe.calls == []
+
+    async def test_a_country_word_without_a_link_gets_the_help(self) -> None:
+        messenger = FakeMessenger()
+        handlers, _ = build(messenger, egress=FakeEgress(proton=("nl",)))
+
+        await handle(handlers, message_update("/vpn nl"))
+
+        assert "/vpn" in messenger.sent[0].text
+
+    async def test_the_route_list_shows_tiers_and_the_countries_on_offer(self) -> None:
+        messenger = FakeMessenger()
+        egress = FakeEgress(proton=("nl", "pl", "ro"))
+        egress.pin("geo.example", "proton:ro")
+        handlers, _ = build(messenger, egress=egress)
+
+        await handle(handlers, message_update("/vpn"))
+
+        text = messenger.sent[0].text
+        assert "• blocked.example — WARP" in text
+        assert "• geo.example — Proton (رومانيا)" in text
+        assert "nl هولندا" in text
 
 
 # --------------------------------------------------------------------------- #

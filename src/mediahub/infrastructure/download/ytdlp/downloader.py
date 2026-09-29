@@ -46,6 +46,7 @@ from mediahub.application.download.errors import (
     LiveSourceNotAllowedError,
     MetadataUnavailableError,
     PlaylistNotAllowedError,
+    ProviderError,
     SizeLimitExceededError,
 )
 from mediahub.application.download.ports import (
@@ -72,6 +73,7 @@ from mediahub.infrastructure.download.ytdlp.progress import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from contextlib import AbstractAsyncContextManager
     from pathlib import Path
 
     from mediahub.application.common.cancellation import CancellationToken
@@ -144,6 +146,7 @@ class ProxyPolicy:
         "_learned",
         "_listed",
         "_lock",
+        "_proton_countries",
         "_proxy",
     )
 
@@ -155,6 +158,7 @@ class ProxyPolicy:
         impersonate: str | None = None,
         impersonate_hosts: Sequence[str] = (),
         learned_file: Path | None = None,
+        proton_countries: Sequence[str] = (),
     ) -> None:
         """Bind the policy to an egress, the hosts known to need it, and a browser fingerprint.
 
@@ -169,10 +173,13 @@ class ProxyPolicy:
             learned_file: Where hosts that turned out to need the egress are
                 kept between processes, and where the operator edits them.
                 ``None`` keeps the memory per-process.
+            proton_countries: The third tier's country codes, when it exists.
+                Only used to say what ``/vpn`` may ask for.
         """
         self._proxy = proxy or None
         self._listed = frozenset(host.lower().lstrip(".") for host in hosts if host)
-        self._learned: set[str] = set()
+        self._learned: dict[str, str] = {}
+        self._proton_countries = tuple(code.lower() for code in proton_countries)
         self._impersonate = impersonate or None
         self._impersonate_hosts = frozenset(
             host.lower().lstrip(".") for host in impersonate_hosts if host
@@ -189,15 +196,36 @@ class ProxyPolicy:
         """Return whether an egress exists to fall back to."""
         return self._proxy is not None
 
+    @property
+    def proton_countries(self) -> tuple[str, ...]:
+        """Return the third tier's country codes; empty when there is no third tier."""
+        return self._proton_countries
+
     def for_host(self, host: str) -> str | None:
-        """Return the egress this host should use, or ``None`` for direct."""
+        """Return the second-tier egress this host should use, or ``None`` for direct."""
         if self._proxy is None:
             return None
+        tier, _country = self.route_for(host)
+        return self._proxy if tier == "warp" else None
+
+    def route_for(self, host: str) -> tuple[str, str | None]:
+        """Return ``(tier, country)`` for ``host``: direct, warp, or proton with a code.
+
+        Configured hosts are second-tier. A learned host carries the tier it
+        was learned on. Subdomains follow their parent.
+        """
         self._reload_if_edited()
         lowered = host.lower()
         with self._lock:
-            known = self._listed | self._learned
-        return self._proxy if _matches(lowered, known) else None
+            learned = dict(self._learned)
+        tier = _tier_for(lowered, learned)
+        if tier is None and _matches(lowered, self._listed):
+            tier = "warp"
+        if tier is None:
+            return "direct", None
+        if tier.startswith("proton:"):
+            return "proton", tier.split(":", maxsplit=1)[1]
+        return ("warp", None) if self._proxy is not None else ("direct", None)
 
     def impersonation_for(self, host: str, *, proxied: bool) -> str | None:
         """Return the browser fingerprint to present to ``host``, if any.
@@ -220,47 +248,68 @@ class ProxyPolicy:
         was already being routed - in which case the proxy is not the answer and
         the original failure is the honest one.
         """
-        if self._proxy is None or self.for_host(host) is not None:
+        if self._proxy is None or self.route_for(host)[0] != "direct":
             return None
-        self._remember(host)
+        self._remember(host, "warp")
         logger.bind(host=host).info(
             "Direct connection to this host was reset; routing it through the egress proxy"
         )
         return self._proxy
 
-    def pin(self, host: str) -> bool:
-        """Route ``host`` through the egress from now on, at the operator's request.
+    def learn_proton(self, host: str, country: str) -> None:
+        """Remember that ``host`` worked through the third tier in ``country``."""
+        self._remember(host, f"proton:{country.lower()}")
+        logger.bind(host=host, country=country).info(
+            "Host answered through the ProtonVPN exit; routing it there from now on"
+        )
 
-        Returns whether that was new. A host already routed - configured,
-        learned, or a parent domain of either - is left as it is.
+    def pin(self, host: str, tier: str = "warp") -> bool:
+        """Route ``host`` through ``tier`` from now on, at the operator's request.
+
+        Returns whether anything changed. A host already on that tier -
+        configured, learned, or a parent domain of either - is left as it is.
+
+        Raises:
+            ValueError: If ``tier`` is not ``warp`` or ``proton:<cc>`` for a
+                configured country.
         """
+        tier = tier.lower()
+        if tier != "warp" and not (
+            tier.startswith("proton:") and tier[7:] in self._proton_countries
+        ):
+            message = f"'{tier}' is not an egress tier this deployment has"
+            raise ValueError(message)
         if self._proxy is None:
             return False
-        if self.for_host(host) is not None:
+        current, country = self.route_for(host)
+        current_label = current if country is None else f"{current}:{country}"
+        if current_label == tier:
             return False
-        self._remember(host)
-        logger.bind(host=host).info("Host pinned to the egress proxy")
+        self._remember(host, tier)
+        logger.bind(host=host, tier=tier).info("Host pinned to an egress tier")
         return True
 
-    def routed(self) -> tuple[str, ...]:
-        """Return every host routed through the egress: configured and learned, sorted."""
+    def routed(self) -> tuple[tuple[str, str], ...]:
+        """Return every routed host with its tier, sorted by host."""
         self._reload_if_edited()
         with self._lock:
-            return tuple(sorted(self._listed | self._learned))
+            entries = dict.fromkeys(self._listed, "warp")
+            entries.update(self._learned)
+        return tuple(sorted(entries.items()))
 
     @property
     def learned_hosts(self) -> tuple[str, ...]:
-        """Return the hosts discovered to need the egress. Diagnostic helper."""
+        """Return the hosts discovered to need an egress. Diagnostic helper."""
         self._reload_if_edited()
         with self._lock:
             return tuple(sorted(self._learned))
 
     # -- The file ------------------------------------------------------------
 
-    def _remember(self, host: str) -> None:
-        """Add a host to the learned set and write the set out."""
+    def _remember(self, host: str, tier: str) -> None:
+        """Record a host's tier and write the list out."""
         with self._lock:
-            self._learned.add(host.lower().lstrip("."))
+            self._learned[host.lower().lstrip(".")] = tier
         self._save()
 
     def _load(self) -> None:
@@ -271,7 +320,7 @@ class ProxyPolicy:
             stat = self._file.stat()
         except FileNotFoundError:
             with self._lock:
-                self._learned = set()
+                self._learned = {}
                 self._file_mtime = None
             return
         except OSError:
@@ -314,8 +363,10 @@ class ProxyPolicy:
         if self._file is None:
             return
         with self._lock:
-            hosts = sorted(self._learned)
-        body = _HOST_LIST_HEADER + "".join(f"{host}\n" for host in hosts)
+            entries = sorted(self._learned.items())
+        body = _HOST_LIST_HEADER + "".join(
+            f"{host}\n" if tier == "warp" else f"{host} {tier}\n" for host, tier in entries
+        )
         try:
             self._file.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._file.with_name(self._file.name + ".tmp")
@@ -335,23 +386,97 @@ def _matches(host: str, names: frozenset[str]) -> bool:
 
 
 _HOST_LIST_HEADER: Final[str] = (
-    "# Hosts the download engine sends through the egress proxy (WARP) on the first attempt.\n"
+    "# Hosts the download engine sends through an egress tunnel on the first attempt.\n"
     "# One host per line; subdomains are covered; '#' starts a comment.\n"
+    "#   host              -> through WARP\n"
+    "#   host proton:nl    -> through the ProtonVPN exit in that country (nl, pl, ro)\n"
     "# A line is added when a direct connection is refused in a way that names the address\n"
-    "# (reset, 403, geo-fence, bot wall), or by /vpn <link>. The running bot re-reads this file\n"
-    "# whenever it changes: delete a line to try that host directly again, delete the file to\n"
-    "# forget all of them. MEDIAHUB_DOWNLOAD__PROXY_HOSTS in .env is the static half of the list.\n"
+    "# (reset, 403, geo-fence, bot wall), when a site answers through WARP with removed /\n"
+    "# geo-blocked / unavailable and a ProtonVPN exit then works, or by /vpn [nl|pl|ro] <link>.\n"
+    "# The running bot re-reads this file whenever it changes: delete a line to try that host\n"
+    "# directly again, delete the file to forget all of them. MEDIAHUB_DOWNLOAD__PROXY_HOSTS in\n"
+    "# .env is the static (WARP) half of the list.\n"
 )
 
 
-def _parse_host_list(text: str) -> set[str]:
-    """Return the hosts named in a host-list file, ignoring comments and blanks."""
-    hosts: set[str] = set()
+def _parse_host_list(text: str) -> dict[str, str]:
+    """Return ``host -> tier`` from a host-list file, ignoring comments and blanks.
+
+    A bare host is the second tier (``warp``); ``host proton:nl`` is the third.
+    Anything else after the host is ignored rather than fatal - a typo in a
+    hand-edited file must not take the whole list with it.
+    """
+    hosts: dict[str, str] = {}
     for raw_line in text.splitlines():
-        line = raw_line.split("#", maxsplit=1)[0].strip().lower().lstrip(".")
-        if line:
-            hosts.add(line)
+        line = raw_line.split("#", maxsplit=1)[0].strip().lower()
+        if not line:
+            continue
+        host, _, tier = line.partition(" ")
+        host = host.lstrip(".")
+        tier = tier.strip()
+        if not host:
+            continue
+        code = tier.removeprefix("proton:")
+        hosts[host] = tier if tier.startswith("proton:") and code else "warp"
     return hosts
+
+
+def _tier_for(host: str, learned: Mapping[str, str]) -> str | None:
+    """Return the learned tier that covers ``host``, the closest parent winning."""
+    best: tuple[int, str] | None = None
+    for name, tier in learned.items():
+        covers = host == name or host.endswith(f".{name}")
+        if covers and (best is None or len(name) > best[0]):
+            best = (len(name), tier)
+    return None if best is None else best[1]
+
+
+@dataclass(frozen=True, slots=True)
+class EgressUsed:
+    """Which exit carried an engine call."""
+
+    tier: str = "direct"
+    country: str | None = None
+
+    @property
+    def label(self) -> str:
+        """Return ``direct``, ``warp`` or ``proton:<cc>``."""
+        return self.tier if self.country is None else f"{self.tier}:{self.country}"
+
+    @property
+    def via_proxy(self) -> bool:
+        """Return whether any tunnel was involved."""
+        return self.tier != "direct"
+
+
+class ThirdTier(Protocol):
+    """What the adapter needs from the ProtonVPN tier: its countries, and a held exit."""
+
+    @property
+    def countries(self) -> tuple[str, ...]:
+        """Return the country codes in the order to try them."""
+        ...
+
+    def hold(self, code: str) -> AbstractAsyncContextManager[str]:
+        """Take the tunnel in ``code`` and yield the proxy URL to use."""
+        ...
+
+
+_THIRD_TIER_CODES: Final[frozenset[str]] = frozenset({"content_removed", "geo_restricted"})
+_THIRD_TIER_SIGNATURES: Final[tuple[str, ...]] = ("unavailable", "not available")
+
+
+def _wants_third_tier(error: DownloadError) -> bool:
+    """Return whether the site named the *content* as unavailable from this exit.
+
+    Removed, geo-blocked and "unavailable" are the answers a different country
+    has been seen to change. A private video or a login wall is not: it fails
+    identically everywhere and gets no third attempt.
+    """
+    if error.code in _THIRD_TIER_CODES:
+        return True
+    text = str(error).lower()
+    return any(needle in text for needle in _THIRD_TIER_SIGNATURES)
 
 
 _ESCALATION_SIGNATURES: Final[tuple[str, ...]] = (
@@ -534,6 +659,7 @@ class YtDlpDownloader:
         "_address_guard",
         "_factory",
         "_inspector",
+        "_proton",
         "_proxy_policy",
         "_settings",
         "_url_policy",
@@ -548,6 +674,7 @@ class YtDlpDownloader:
         youtube_dl_factory: YoutubeDLFactory | None = None,
         proxy_policy: ProxyPolicy | None = None,
         inspector: StreamInspector | None = None,
+        proton: ThirdTier | None = None,
     ) -> None:
         """Wire the engine to its configuration and its guards.
 
@@ -565,18 +692,23 @@ class YtDlpDownloader:
                 not the media that was asked for. Omitting it skips the check,
                 which is right for a device without ``ffprobe`` and for tests
                 whose "downloads" are a few zero bytes.
+            proton: The third egress tier, asked only when a site answers
+                through the second one with "removed", "geo-blocked" or
+                "unavailable". ``None`` means there are two tiers.
         """
         self._settings = settings
         self._url_policy = url_policy or UrlPolicy()
         self._address_guard = address_guard
         self._factory = youtube_dl_factory or default_youtube_dl_factory
         self._inspector = inspector
+        self._proton = proton
         self._proxy_policy = proxy_policy or ProxyPolicy(
             settings.proxy,
             settings.proxy_hosts,
             impersonate=settings.impersonate,
             impersonate_hosts=settings.impersonate_hosts,
             learned_file=settings.egress_hosts_file,
+            proton_countries=proton.countries if proton is not None else (),
         )
 
     @property
@@ -684,7 +816,7 @@ class YtDlpDownloader:
             # reason. Without this a flaky quarter of attempts reached the user
             # as a flat failure - "some links work and some do not", with
             # nothing to tell them apart.
-            info, via_proxy = await retry_async(
+            info, used = await retry_async(
                 lambda: self._with_egress_fallback(run, host=validated.host),
                 schedule=RetrySchedule(
                     attempts=self._settings.download_attempts,
@@ -701,7 +833,7 @@ class YtDlpDownloader:
                 existing=existing,
                 started_at=started_at,
                 max_bytes=max_bytes,
-                via_proxy=via_proxy,
+                egress=used,
             )
             await self._inspect(result, workspace, url=validated.value)
         except BaseException:
@@ -736,7 +868,7 @@ class YtDlpDownloader:
         run: Callable[[str | None, str | None], Awaitable[Mapping[str, Any]]],
         *,
         host: str,
-    ) -> tuple[Mapping[str, Any], bool]:
+    ) -> tuple[Mapping[str, Any], EgressUsed]:
         """Run an engine call, retrying through the egress if the *address* was the problem.
 
         Returns the engine's answer and whether it came through the proxy, so
@@ -750,28 +882,89 @@ class YtDlpDownloader:
         retrying them there would double the time to report a failure that was
         already final.
 
-        At most one escalation: if the host was already being routed, the proxy
-        is not the answer and the first error is the honest one. Proxied
-        requests present a browser fingerprint (see
-        :meth:`ProxyPolicy.impersonation_for`); direct ones do so only for hosts
-        known to need it.
+        At most one escalation to the second tier: if the host was already
+        being routed, that proxy is not the answer. Proxied requests present a
+        browser fingerprint (see :meth:`ProxyPolicy.impersonation_for`); direct
+        ones do so only for hosts known to need it.
+
+        The third tier comes after that, and only when the answer named the
+        *content* as unavailable from here - removed, geo-blocked, unavailable -
+        because that is what a different country can change. Countries are
+        tried in their configured order; the one that works is remembered for
+        the host. A host already learned or pinned to the third tier goes there
+        first and never touches the direct path.
         """
+        tier, country = self._proxy_policy.route_for(host)
+        if tier == "proton" and self._proton is not None:
+            return await self._through_proton(run, host, first=country, after=None)
+
         proxy = self._proxy_policy.for_host(host)
         proxied = proxy is not None
         try:
             info = await run(proxy, self._proxy_policy.impersonation_for(host, proxied=proxied))
         except DownloadError as error:
-            if not _should_escalate(error):
-                raise
-            escalated = self._proxy_policy.escalate(host)
-            if escalated is None:
-                raise
-            logger.bind(host=host, code=error.code).info(
+            last: DownloadError = error
+        else:
+            return info, EgressUsed("warp" if proxied else "direct")
+
+        escalated = self._proxy_policy.escalate(host) if _should_escalate(last) else None
+        if escalated is not None:
+            logger.bind(host=host, code=last.code).info(
                 "Refused on the direct path; retrying through the egress proxy"
             )
-            info = await run(escalated, self._proxy_policy.impersonation_for(host, proxied=True))
-            return info, True
-        return info, proxied
+            try:
+                info = await run(
+                    escalated, self._proxy_policy.impersonation_for(host, proxied=True)
+                )
+            except DownloadError as second:
+                last = second
+            else:
+                return info, EgressUsed("warp")
+        if self._proton is not None and _wants_third_tier(last):
+            return await self._through_proton(run, host, first=None, after=last)
+        raise last
+
+    async def _through_proton(
+        self,
+        run: Callable[[str | None, str | None], Awaitable[Mapping[str, Any]]],
+        host: str,
+        *,
+        first: str | None,
+        after: DownloadError | None,
+    ) -> tuple[Mapping[str, Any], EgressUsed]:
+        """Try the third tier's countries in order, ``first`` ahead of the rest.
+
+        Stops at the first country that answers, and moves on only when the
+        failure is one another country could cure (content unavailable from
+        here) or the tunnel itself could not be reached. Anything else - a
+        private video, a login wall - is final and is raised as it is. Never
+        falls back to the direct path: a host that reached this tier was
+        refused there already, and the kill switch is a promise.
+        """
+        assert self._proton is not None  # noqa: S101 - the caller checked
+        countries = list(self._proton.countries)
+        if first is not None and first in countries:
+            countries.remove(first)
+            countries.insert(0, first)
+        last = after
+        for code in countries:
+            try:
+                async with self._proton.hold(code) as proxy:
+                    logger.bind(host=host, country=code).info("Trying the ProtonVPN exit")
+                    info = await run(
+                        proxy, self._proxy_policy.impersonation_for(host, proxied=True)
+                    )
+            except DownloadError as error:
+                last = error
+                if _wants_third_tier(error) or isinstance(error, ProviderError):
+                    continue
+                raise
+            self._proxy_policy.learn_proton(host, code)
+            return info, EgressUsed("proton", code)
+        if last is None:  # pragma: no cover - a tier with no countries is refused at construction
+            message = f"'{host}' could not be fetched through any ProtonVPN exit"
+            raise ProviderError(message, provider="protonvpn")
+        raise last
 
     # -- Probing -------------------------------------------------------------
 
@@ -793,7 +986,7 @@ class YtDlpDownloader:
                 url=validated.value,
             )
 
-        info, via_proxy = await self._with_egress_fallback(run, host=validated.host)
+        info, used = await self._with_egress_fallback(run, host=validated.host)
         metadata = to_metadata(info, url=validated.value, probed_at=datetime.now(UTC))
         logger.bind(
             provider=metadata.provider,
@@ -801,7 +994,7 @@ class YtDlpDownloader:
             live=metadata.is_live,
             playlist=metadata.is_playlist,
             expected_bytes=metadata.expected_bytes,
-            egress="proxy" if via_proxy else "direct",
+            egress=used.label,
         ).debug("Probed source")
         if metadata.is_playlist:
             return await self._first_of(metadata, info, timeout_seconds=timeout_seconds)
@@ -995,9 +1188,10 @@ class YtDlpDownloader:
         existing: set[str],
         started_at: datetime,
         max_bytes: int | None,
-        via_proxy: bool = False,
+        egress: EgressUsed | None = None,
     ) -> DownloadResult:
         """Verify what landed on disk and describe it."""
+        used = egress or EgressUsed()
         metadata = to_metadata(info, url=validated.value, probed_at=started_at)
         self._enforce_source_policy(request, metadata)
 
@@ -1025,7 +1219,8 @@ class YtDlpDownloader:
             started_at=started_at,
             finished_at=datetime.now(UTC),
             resumed=request.resume and bool(existing),
-            via_proxy=via_proxy,
+            via_proxy=used.via_proxy,
+            egress=used.label,
         )
 
     @staticmethod

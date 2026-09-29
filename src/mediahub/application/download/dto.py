@@ -296,7 +296,9 @@ class AcquisitionSummary:
     local_copy_released: bool = True
     items_delivered: int = 1
     via_proxy: bool = False
-    """Whether the fetch went through the egress proxy rather than the direct path."""
+    """Whether the fetch went through an egress proxy rather than the direct path."""
+    egress: str = "direct"
+    """Which exit carried it: ``direct``, ``warp`` or ``proton:<cc>``."""
     capped_from: str | None = None
     """Label of the better rung that was skipped because it would not fit the destination."""
     sent_as_document: bool = False

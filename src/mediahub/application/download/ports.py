@@ -536,6 +536,8 @@ class DownloadResult:
     finished_at: datetime
     resumed: bool = False
     via_proxy: bool = False
+    egress: str = "direct"
+    """Which exit carried the fetch: ``direct``, ``warp`` or ``proton:<cc>``."""
 
     def __post_init__(self) -> None:
         """Enforce that exactly one artifact is the media itself."""
@@ -574,15 +576,21 @@ class EgressRoutes(Protocol):
         """Return whether an egress exists at all."""
         ...
 
-    def pin(self, host: str) -> bool:
-        """Route ``host`` (and its subdomains) through the egress from now on.
+    @property
+    def proton_countries(self) -> tuple[str, ...]:
+        """Return the third tier's country codes, in order; empty without that tier."""
+        ...
 
-        Returns whether that was new; a host already routed is left alone.
+    def pin(self, host: str, tier: str = "warp") -> bool:
+        """Route ``host`` (and its subdomains) through ``tier`` from now on.
+
+        ``tier`` is ``warp`` or ``proton:<cc>``. Returns whether that changed
+        anything; a host already on that tier is left alone.
         """
         ...
 
-    def routed(self) -> tuple[str, ...]:
-        """Return every host currently routed through the egress, sorted."""
+    def routed(self) -> tuple[tuple[str, str], ...]:
+        """Return every routed host with its tier, sorted by host."""
         ...
 
 

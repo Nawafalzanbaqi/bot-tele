@@ -421,9 +421,16 @@ class TestFormatters:
         assert "VP9/AV1" in text
 
     def test_says_when_the_proxy_was_used(self) -> None:
-        text = formatters.render_delivered(self._delivered(via_proxy=True))
+        text = formatters.render_delivered(self._delivered(via_proxy=True, egress="warp"))
 
         assert "نفق الخروج" in text
+
+    def test_says_which_country_when_the_third_tier_was_used(self) -> None:
+        text = formatters.render_delivered(self._delivered(via_proxy=True, egress="proton:pl"))
+
+        assert "Proton" in text
+        assert "بولندا" in text
+        assert "نفق الخروج بعد" not in text, "one route line, not two"
 
     def test_says_where_the_time_went(self) -> None:
         text = formatters.render_delivered(

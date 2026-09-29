@@ -167,6 +167,7 @@ def render_help() -> str:
         "/history — ما حمّلته مؤخرًا\n"
         "/cancel — إيقاف التحميل الجاري\n"
         "/vpn <رابط> — جلبه عبر نفق WARP وتوجيه موقعه عبره من الآن؛ بدون رابط يعرض القائمة\n"
+        "/vpn nl <رابط> — عبر نفق Proton من بلد معيّن (nl هولندا، pl بولندا، ro رومانيا)\n"
         "/cookies — الكوكيز المحفوظة (للمالك فقط)\n\n"
         "بعض المواقع — X وتيك توك وإنستقرام الخاص — لا تعرض شيئًا لزائر غير "
         "مسجّل. أرسل لي ملف cookies.txt بصيغة Netscape وسأستخدمه.\n\n"
@@ -281,7 +282,10 @@ def render_delivered(summary: AcquisitionSummary) -> str:
         )
     if summary.sent_as_document:
         lines.append("📎 أُرسل كملف لأن ترميزه (VP9/AV1) لا يُعرض داخل تلجرام؛ افتحه بمشغّل خارجي.")
-    if summary.via_proxy:
+    if summary.egress.startswith("proton:"):
+        country = _PROTON_COUNTRIES_AR.get(summary.egress[7:], summary.egress[7:].upper())
+        lines.append(f"🛡 جُلب عبر نفق Proton ({country}) بعد أن رُفض المسار المباشر ونفق WARP.")
+    elif summary.via_proxy:
         # Said only when it happened: the direct path is the normal one, and a
         # line about the route on every message would stop being read.
         lines.append("🛡 جُلب عبر نفق الخروج بعد أن رُفض المسار المباشر.")
@@ -330,27 +334,49 @@ def render_vpn_unavailable() -> str:
     return "لا يوجد نفق خروج مضبوط في هذه النسخة."
 
 
-def render_vpn_routes(hosts: Sequence[str]) -> str:
-    """Render the hosts currently routed through the egress, for ``/vpn`` alone."""
-    if not hosts:
-        return (
-            "لا توجد مواقع موجَّهة عبر النفق حاليًا.\n\n"
-            "أرسل /vpn مع رابط لجلبه عبر النفق وتوجيه موقعه عبره من الآن."
+_PROTON_COUNTRIES_AR: dict[str, str] = {"nl": "هولندا", "pl": "بولندا", "ro": "رومانيا"}
+
+
+def _tier_name(tier: str) -> str:
+    """Return the tier's name for a person: WARP, or Proton with its country."""
+    if tier.startswith("proton:"):
+        code = tier[7:]
+        return f"Proton ({_PROTON_COUNTRIES_AR.get(code, code.upper())})"
+    return "WARP"
+
+
+def render_vpn_routes(routes: Sequence[tuple[str, str]], proton_countries: Sequence[str]) -> str:
+    """Render the hosts currently routed through a tunnel, for ``/vpn`` alone."""
+    lines: list[str] = []
+    if not routes:
+        lines.append("لا توجد مواقع موجَّهة عبر نفق حاليًا.")
+    else:
+        lines.append("المواقع الموجَّهة عبر نفق من أول محاولة:")
+        lines.extend(f"• {host} — {_tier_name(tier)}" for host, tier in routes)
+    lines.append("\nأرسل /vpn مع رابط لجلبه عبر WARP وتوجيه موقعه عبره من الآن.")
+    if proton_countries:
+        codes = "، ".join(
+            f"{code} {_PROTON_COUNTRIES_AR.get(code, '')}".strip() for code in proton_countries
         )
-    lines = ["المواقع الموجَّهة عبر نفق الخروج من أول محاولة:"]
-    lines.extend(f"• {host}" for host in hosts)
+        lines.append(f"أو /vpn <بلد> <رابط> عبر Proton من بلد معيّن: {codes}.")
     lines.append(
-        "\nالقائمة المتعلَّمة محفوظة في ملف على الجهاز ويُعاد قراءتها عند تعديله؛ "
+        "القائمة المتعلَّمة محفوظة في ملف على الجهاز ويُعاد قراءتها عند تعديله؛ "
         "احذف سطرًا ليُجرَّب موقعه مباشرة مرة أخرى."
     )
     return "\n".join(lines)
 
 
-def render_vpn_pinned(host: str, *, already: bool) -> str:
-    """Render the acknowledgement of ``/vpn <link>``."""
+def render_vpn_pinned(host: str, *, already: bool, tier: str = "warp") -> str:
+    """Render the acknowledgement of ``/vpn [country] <link>``."""
+    name = _tier_name(tier)
     if already:
-        return f"🛡 {host} موجَّه عبر النفق أصلًا؛ جارٍ الجلب عبره."
-    return f"🛡 سيُجلب هذا الرابط عبر النفق، وسيُوجَّه {host} عبره من الآن."
+        return f"🛡 {host} موجَّه عبر {name} أصلًا؛ جارٍ الجلب عبره."
+    return f"🛡 سيُجلب هذا الرابط عبر {name}، وسيُوجَّه {host} عبره من الآن."
+
+
+def render_vpn_no_proton() -> str:
+    """Render the answer to ``/vpn <country> ...`` on a deployment without that tier."""
+    return "لا يوجد نفق Proton مضبوط في هذه النسخة؛ استخدم /vpn <رابط> لنفق WARP."
 
 
 def render_nothing_to_cancel() -> str:
