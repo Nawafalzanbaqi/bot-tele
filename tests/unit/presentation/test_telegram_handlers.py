@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from loguru import logger
 
 from mediahub.application.access.ports import Principal
 from mediahub.application.common.errors import PermissionDeniedError
@@ -690,6 +691,53 @@ class TestProgressPresenter:
         await presenter.stop()
 
         assert messenger.edits == []
+
+
+# --------------------------------------------------------------------------- #
+# A failed probe leaves a trace                                                #
+# --------------------------------------------------------------------------- #
+
+
+class TestProbeFailuresAreLogged:
+    """The reply is the only record otherwise, and it lives in one chat."""
+
+    async def test_the_code_and_the_host_are_logged_and_the_url_is_not(self) -> None:
+        written: list[str] = []
+        handle = logger.add(written.append, format="{message} {extra}", level="WARNING")
+        try:
+            messenger = FakeMessenger()
+            handlers, _ = build(
+                messenger,
+                probe=FakeProbe(error=NoPlayableMediaError("nothing here")),
+            )
+
+            intent = parse_update(message_update("https://example.com/watch?v=secret-id-123"))
+            assert intent is not None
+            await handlers.handle(intent)
+        finally:
+            logger.remove(handle)
+
+        lines = [line for line in written if "Probe failed" in line]
+        assert len(lines) == 1
+        assert "'code': 'no_playable_media'" in lines[0]
+        assert "'host': 'example.com'" in lines[0]
+        assert "'stage': 'probe'" in lines[0]
+        assert "secret-id-123" not in lines[0], "the URL itself never reaches the log"
+        # And the person still got their explanation.
+        assert messenger.sent, "the reply is unchanged by the log line"
+
+    async def test_a_successful_probe_logs_no_failure(self) -> None:
+        written: list[str] = []
+        handle = logger.add(written.append, format="{message}", level="WARNING")
+        try:
+            handlers, _ = build(FakeMessenger())
+            intent = parse_update(message_update("https://example.com/a"))
+            assert intent is not None
+            await handlers.handle(intent)
+        finally:
+            logger.remove(handle)
+
+        assert not any("Probe failed" in line for line in written)
 
 
 # --------------------------------------------------------------------------- #

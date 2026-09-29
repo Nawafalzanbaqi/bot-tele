@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlsplit
 
 from loguru import logger
 
@@ -300,6 +301,14 @@ class TelegramHandlers:
             # can name the *likely* cause. On the sites that refuse logged-out
             # visitors, "I could not read that link" reads as a broken bot and
             # gives the user nothing to act on.
+            #
+            # Logged as well as replied: the reply is the only record otherwise,
+            # and it lives in one chat. Two failed links on 2026-09-28 left a
+            # log that showed the escalation and the reply, and not the code.
+            # Host only - a URL can carry a token or a private id.
+            logger.bind(stage="probe", code=exc.code, host=_host_of(text)).warning(
+                "Probe failed; told the user"
+            )
             await self._say(intent, await self._explain_failure(exc.code, url=text))
             return
 
@@ -578,6 +587,14 @@ A table rather than a chain of conditions, for the same reason the domain's
 permissions are one: adding a command means adding a line here, where the
 decision is visible, instead of an ``if`` buried in a handler.
 """
+
+
+def _host_of(url: str) -> str:
+    """Return a URL's host for a log line, never the URL itself."""
+    try:
+        return (urlsplit(url).hostname or "?").lower()
+    except ValueError:
+        return "?"
 
 
 def _is_drm_service(url: str) -> bool:
