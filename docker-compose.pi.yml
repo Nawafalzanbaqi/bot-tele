@@ -73,6 +73,13 @@ services:
       # Hosts that needed the egress, kept across restarts and hand-editable
       # (one per line). On the host: the mediahub_data volume, egress-hosts.txt.
       MEDIAHUB_DOWNLOAD__EGRESS_HOSTS_FILE: /data/egress-hosts.txt
+      # Third egress tier (ProtonVPN Free, service `vpn-proton` below). The
+      # tier exists only when all three are set; the key comes from .env
+      # (MEDIAHUB_DOWNLOAD__PROTON_CONTROL_KEY) and matches the roles file
+      # mounted into vpn-proton. Leave the key unset to keep two tiers.
+      MEDIAHUB_DOWNLOAD__PROTON_PROXY: http://vpn-proton:8888
+      MEDIAHUB_DOWNLOAD__PROTON_CONTROL_URL: http://vpn-proton:8000
+      MEDIAHUB_DOWNLOAD__PROTON_COUNTRIES: ${PROTON_COUNTRIES:-nl,pl,ro}
     volumes:
       - data:/data
       # The cookie jar, and deliberately **writable**.
@@ -270,6 +277,60 @@ services:
       HTTPPROXY: "on"
       HTTPPROXY_LISTENING_ADDRESS: ":8888"
       TZ: ${TZ:-Asia/Riyadh}
+    networks:
+      - mediahub
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Third egress tier: ProtonVPN Free, through a second gluetun. Opt-in with
+  # the same `vpn` profile. WARP (`vpn` above) stays exactly as it is; this one
+  # is asked only when a site answers through WARP with "removed",
+  # "geo-blocked" or "unavailable", and by `/vpn <country> <link>`.
+  #
+  # One container, not one per country: a free Proton account allows a single
+  # connection, so the exit country is switched at run time through gluetun's
+  # control server (PUT /v1/vpn/settings), one country at a time, under a lock
+  # in the bot. The control server is API-key protected by the roles file
+  # mounted below; the same key sits in .env as
+  # MEDIAHUB_DOWNLOAD__PROTON_CONTROL_KEY. Credentials are the account's
+  # OpenVPN user/password in ./secrets/proton.env (0600, git-ignored).
+  #
+  # Kill switch, same as WARP: gluetun's own firewall inside the container,
+  # and the proxy only answers while the tunnel is up. A routed fetch that
+  # loses the tunnel fails; nothing falls back to the direct route.
+  vpn-proton:
+    image: qmcgaw/gluetun@sha256:988d9cb1982f688ce51f3511057b90c5c8d01889db60a4d56e5230aebf1d3339
+    restart: unless-stopped
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ./secrets/proton.env
+    environment:
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: openvpn
+      FREE_ONLY: "on"
+      # The starting country; the bot moves it (Netherlands -> Poland -> Romania).
+      SERVER_COUNTRIES: ${PROTON_COUNTRY:-Netherlands}
+      DOT: "on"
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: ":8888"
+      HTTP_CONTROL_SERVER_ADDRESS: ":8000"
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      # Country in the public-IP lookup is what the bot waits for after a switch.
+      PUBLICIP_ENABLED: "on"
+      TZ: ${TZ:-Asia/Riyadh}
+    volumes:
+      - ./secrets/gluetun-proton-auth.toml:/gluetun/auth/config.toml:ro
     networks:
       - mediahub
     deploy:
