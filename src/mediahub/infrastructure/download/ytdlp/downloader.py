@@ -71,6 +71,7 @@ from mediahub.infrastructure.download.ytdlp.progress import (
     ProgressBridge,
     SizeCeilingExceeded,
 )
+from mediahub.infrastructure.download.ytdlp.rewrites import engine_url
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -1054,7 +1055,7 @@ class YtDlpDownloader:
         )
         engine = self._factory(options)
         try:
-            info = engine.extract_info(validated.value, download=False)
+            info = engine.extract_info(engine_url(validated.value), download=False)
         except Exception as exc:
             raise classify(exc, url=validated.value) from exc
         finally:
@@ -1091,7 +1092,7 @@ class YtDlpDownloader:
         engine = self._factory(options)
         try:
             bridge.check_guards()
-            info = engine.extract_info(validated.value, download=True)
+            info = engine.extract_info(engine_url(validated.value), download=True)
         except (EngineAbort, SizeCeilingExceeded):
             raise
         except Exception as exc:
