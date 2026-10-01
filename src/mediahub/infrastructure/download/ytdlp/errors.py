@@ -71,6 +71,7 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
     (
         (
             "phantomjs",
+            "browser challenge",
             "javascript challenge",
             "js challenge",
             "checking your browser",
