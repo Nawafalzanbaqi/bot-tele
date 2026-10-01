@@ -325,8 +325,10 @@ class DownloadSettings(_ConfigSection):
             ``probe_attempts`` only ever protected probing, so a refusal met
             while *downloading* reached the user as a flat failure for
             something that would have worked seconds later.
-        concurrent_fragments: Fragments fetched in parallel. More than one
-            rarely helps on a single-core-bound device.
+        concurrent_fragments: HLS/DASH fragments fetched in parallel. Four
+            took an 18 MB X video (HLS) from 18.2 s to 7.4 s on the Pi 5 on
+            2026-10-01; aria2c as an external downloader measured 19.3 s - no
+            better than one native fragment - and stays off.
         progress_interval_seconds: Shortest gap between progress callbacks.
         rate_limit_bytes_per_second: Optional bandwidth cap, so a download does
             not saturate a household connection.
@@ -412,7 +414,7 @@ class DownloadSettings(_ConfigSection):
     retries: int = Field(default=3, ge=0, le=20)
     fragment_retries: int = Field(default=5, ge=0, le=50)
     extractor_retries: int = Field(default=5, ge=0, le=10)
-    concurrent_fragments: int = Field(default=1, ge=1, le=8)
+    concurrent_fragments: int = Field(default=4, ge=1, le=8)
     progress_interval_seconds: float = Field(default=0.5, ge=0)
     rate_limit_bytes_per_second: int | None = Field(default=None, ge=1)
     user_agent: str | None = None
