@@ -499,6 +499,46 @@ class TestDeliveryPolicy:
         assert summary.quality_label == "1080p"
         assert summary.capped_from is None
 
+    async def test_the_label_names_the_frame_the_engine_took(self, tmp_path: Path) -> None:
+        """Auto picks the 1080p rung; the engine takes a 640x360 file; the card says 360p."""
+        delivery = FakeDeliveryProvider(maximum_file_size=100_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={
+                "format_id": "18",
+                "ext": "mp4",
+                "vcodec": "avc1.42001E",
+                "acodec": "mp4a",
+                "width": 640,
+                "height": 360,
+            },
+        )
+
+        summary = await self._run(use_case, "auto")
+
+        assert summary.quality_label == "360p"
+
+    async def test_a_frame_at_the_rung_keeps_the_rung_name(self, tmp_path: Path) -> None:
+        """A vertical 1080x1920 file under the 1080p rung is still "1080p", not "1920p"."""
+        delivery = FakeDeliveryProvider(maximum_file_size=100_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={
+                "format_id": "137",
+                "ext": "mp4",
+                "vcodec": "avc1.640028",
+                "acodec": "mp4a",
+                "width": 1080,
+                "height": 1920,
+            },
+        )
+
+        summary = await self._run(use_case, "auto")
+
+        assert summary.quality_label == "1080p"
+
     async def test_a_rung_the_person_chose_is_never_called_capped(self, tmp_path: Path) -> None:
         delivery = FakeDeliveryProvider(maximum_file_size=20_000_000)
         use_case = self._use_case(

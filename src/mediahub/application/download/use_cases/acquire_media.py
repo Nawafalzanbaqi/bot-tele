@@ -26,6 +26,7 @@ from mediahub.application.download.journal import JournalEntry
 from mediahub.application.download.ports import DownloadRequest
 from mediahub.application.download.quality import (
     AUTO_KEY,
+    ORIGINAL_KEY,
     build_quality_options,
     is_compatible_codec,
     resolve_auto,
@@ -216,13 +217,14 @@ class AcquireMedia:
             )
             delivered_at = time.monotonic()
 
+            delivered_label = _delivered_label(chosen, result.selected_format)
             await self._journal.record(
                 JournalEntry(
                     principal=request.requested_by,
                     url=result.url,
                     provider=result.provider,
                     title=metadata.title,
-                    quality_label=chosen.label,
+                    quality_label=delivered_label,
                     bytes_delivered=receipt.size_bytes,
                     remote_id=receipt.provider_asset_id,
                     remote_unique_id=receipt.reference.remote_unique_id,
@@ -258,7 +260,7 @@ class AcquireMedia:
             url=result.url,
             provider=result.provider,
             title=metadata.title,
-            quality_label=chosen.label,
+            quality_label=delivered_label,
             bytes_delivered=receipt.size_bytes,
             elapsed_seconds=elapsed,
             remote_id=receipt.provider_asset_id,
@@ -427,3 +429,28 @@ def _thumbnail_of(artifacts: tuple[ArtifactRef, ...]) -> ArtifactRef | None:
         (artifact for artifact in artifacts if artifact.role is ArtifactRole.THUMBNAIL),
         None,
     )
+
+
+def _delivered_label(chosen: QualityOption, taken: SelectedFormat) -> str:
+    """Name the rendition that was taken, not only the rung that was asked for.
+
+    A rung is a ceiling for the engine - "up to 2160p, H.264 first" - and on a
+    source whose 2160p is VP9-only the engine correctly takes 1080p H.264. The
+    card then said "2160p" for a 1920x1080 file (every YouTube 4K link on
+    2026-10-01). When the frame is known and sits *below* the rung, the frame
+    is the honest label; "Best available" becomes the frame too. A frame at or
+    above the rung keeps the rung's name, and audio and "Original" are left
+    alone - they are not frames.
+    """
+    if chosen.is_audio_only or chosen.key == ORIGINAL_KEY or taken.is_audio_only:
+        return chosen.label
+    short: int | None = taken.height
+    if taken.width is not None and taken.height is not None:
+        short = min(taken.width, taken.height)
+    if short is None or short <= 0:
+        return chosen.label
+    rung = int(chosen.key[1:]) if chosen.key[:1] == "h" and chosen.key[1:].isdigit() else None
+    if rung is None or short < rung:
+        return f"{short}p"
+    return chosen.label
+
