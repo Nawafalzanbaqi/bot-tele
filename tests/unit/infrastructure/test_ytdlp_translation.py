@@ -204,6 +204,18 @@ class TestMetadataMapping:
 
         assert to_metadata(info, url="u", probed_at=NOW).kind is MediaType.AUDIO
 
+    def test_a_single_format_info_dict_offers_its_one_video(self) -> None:
+        """Snapchat Spotlight: no `formats` list, the file is described at the top level."""
+        info = video_info(ext="mp4", width=540, height=960, duration=23)
+        del info["formats"]
+        info["url"] = "https://cdn.example/clip.mp4"
+
+        metadata = to_metadata(info, url="https://example.com/s", probed_at=NOW)
+
+        assert metadata.has_video
+        assert [video.height for video in metadata.video_formats] == [960]
+        assert metadata.kind is MediaType.VIDEO
+
     def test_an_almost_empty_info_dict_still_maps(self) -> None:
         metadata = to_metadata({}, url="https://example.com/a", probed_at=NOW)
 

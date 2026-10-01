@@ -84,6 +84,43 @@ def _codec(info: Mapping[str, Any], key: str) -> str | None:
     return value
 
 
+_SINGLE_FORMAT_KEYS: Final[tuple[str, ...]] = (
+    "format_id",
+    "ext",
+    "vcodec",
+    "acodec",
+    "width",
+    "height",
+    "fps",
+    "tbr",
+    "filesize",
+    "filesize_approx",
+    "format_note",
+    "protocol",
+    "url",
+)
+
+
+def _format_entries(info: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
+    """Return the renditions an info dict describes, in either of its shapes.
+
+    yt-dlp has two: a ``formats`` list, or - for extractors that know one file
+    only, such as Snapchat Spotlight - a top-level ``url`` with ``ext``,
+    ``width`` and ``height`` beside it and no ``formats`` key at all. The engine
+    itself synthesises a single format "0" from the second shape; ``-F`` shows
+    it. Until 2026-10-01 only the list was read, so a Spotlight clip mapped to a
+    *video with no renditions* and was refused as offering nothing to fetch.
+    """
+    entries = info.get("formats")
+    if isinstance(entries, list) and entries:
+        return entries
+    if not isinstance(info.get("url"), str):
+        return ()
+    single = {key: info[key] for key in _SINGLE_FORMAT_KEYS if info.get(key) is not None}
+    single["format_id"] = str(info.get("format_id") or "0")
+    return (single,)
+
+
 def _declared_absent(info: Mapping[str, Any], key: str) -> bool:
     """Return whether the engine said this stream is *absent* (``"none"``).
 
@@ -298,9 +335,7 @@ def to_metadata(info: Mapping[str, Any], *, url: str, probed_at: datetime) -> Me
         A metadata DTO. Missing fields become ``None`` rather than raising: a
         source that omits its duration is normal, not an error.
     """
-    entries = info.get("formats")
-    raw_formats: Sequence[Mapping[str, Any]] = entries if isinstance(entries, list) else []
-    videos, audios = split_formats(raw_formats)
+    videos, audios = split_formats(_format_entries(info))
 
     raw_thumbnails = info.get("thumbnails")
     thumbnails = to_thumbnails(raw_thumbnails if isinstance(raw_thumbnails, list) else [])
