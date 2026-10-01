@@ -31,7 +31,7 @@ import io
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from loguru import logger
 
@@ -47,6 +47,15 @@ _InlineKeyboardMarkup: Any = None
 _InlineKeyboardButton: Any = None
 _InputMediaPhoto: Any = None
 _InputMediaVideo: Any = None
+
+MEDIA_READ_TIMEOUT_SECONDS: Final[float] = 900.0
+"""How long one media send may take to be acknowledged.
+
+A self-hosted Bot API server reads the file by path and uploads it to
+Telegram itself; the HTTP answer arrives only when that upload is done. At
+the 2000 MiB ceiling that is minutes. The connection default of 60 s was
+enough for a 280 MB clip (39 s) and not for a 4K /max result (2026-10-01:
+"temporarily unavailable" after a complete download)."""
 
 try:  # pragma: no cover - exercised by the presence or absence of the package
     from telegram import (
@@ -397,6 +406,9 @@ class PythonTelegramBotClient:
             "chat_id": chat_id,
             "caption": caption,
             "filename": filename,
+            # By path, the server uploads the file to Telegram before it
+            # answers; a 2000 MiB file is minutes, not the 60 s of a text.
+            "read_timeout": MEDIA_READ_TIMEOUT_SECONDS,
         }
         payload: Any = content
         if local_path is not None and self._local_mode:
@@ -465,7 +477,9 @@ class PythonTelegramBotClient:
                     _InputMediaPhoto(media=source, caption=item.caption, filename=item.filename)
                 )
         try:
-            messages = await self._bot.send_media_group(chat_id=chat_id, media=media)
+            messages = await self._bot.send_media_group(
+                chat_id=chat_id, media=media, read_timeout=MEDIA_READ_TIMEOUT_SECONDS
+            )
         finally:
             for handle in opened:
                 handle.close()
