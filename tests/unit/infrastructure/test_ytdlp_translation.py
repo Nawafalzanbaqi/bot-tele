@@ -403,6 +403,20 @@ class TestPlayableOutput:
         assert "/bv*[height<=1080]+ba" in expression
         assert expression.endswith("/b")
 
+    def test_a_muxed_file_not_declared_vp9_or_av1_can_outrank_the_fallback(self) -> None:
+        """Instagram/Facebook: the H.264 file carries no codec field; it must still win."""
+        selection = FormatSelection.up_to_height(1080, allow_merge=True, prefer_compatible=True)
+
+        expression = build_format_expression(selection, muxed_before_fallback=True)
+        plain = build_format_expression(selection)
+
+        muxed = "b[vcodec!^=?vp0][vcodec!^=?av01][height<=?1080]"
+        assert muxed in expression
+        assert muxed not in plain
+        hevc = expression.index("[vcodec^=hev1]")
+        fallback = expression.index("bv*[height<=1080]+ba")
+        assert hevc < expression.index(muxed) < fallback, "after H.264/HEVC merges, before anything"
+
     def test_hevc_is_the_second_choice_before_anything_goes(self) -> None:
         """H.265 plays inline too, and is smaller; VP9/AV1 come only when nothing else exists."""
         expression = build_format_expression(

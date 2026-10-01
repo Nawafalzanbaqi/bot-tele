@@ -446,8 +446,21 @@ class DownloadSettings(_ConfigSection):
         "facebook.com",
         "dailymotion.com",
     )
+    # Hosts whose adaptive renditions are VP9/AV1-only while a plain progressive
+    # MP4 of the same post is H.264: Instagram's "1/2/3" and Facebook's "sd/hd"
+    # (measured 2026-10-01: 720p H.264 + AAC on both). The engine reports no
+    # codec or size for those files, so by codec they lose to a VP9 merge that
+    # then has to be sent as a document. For these hosts an already-muxed file
+    # that is not declared VP9/AV1 is tried before the "anything" fallback.
+    prefer_muxed_hosts: Annotated[tuple[str, ...], NoDecode] = (
+        "instagram.com",
+        "facebook.com",
+        "fb.watch",
+    )
 
-    @field_validator("proxy_hosts", "impersonate_hosts", "proton_countries", mode="before")
+    @field_validator(
+        "proxy_hosts", "impersonate_hosts", "proton_countries", "prefer_muxed_hosts", mode="before"
+    )
     @classmethod
     def _split_hosts(cls, value: object) -> object:
         """Accept a comma-separated list, not only JSON.

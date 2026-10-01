@@ -21,11 +21,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.download.ports import FormatSelection
 
 
-def build_format_expression(selection: FormatSelection) -> str:
+def build_format_expression(
+    selection: FormatSelection, *, muxed_before_fallback: bool = False
+) -> str:
     """Return the yt-dlp ``format`` expression for a selection.
 
     Args:
         selection: What the caller wants.
+        muxed_before_fallback: When compatibility is asked for, try an
+            already-muxed file that is not declared VP9/AV1 before the
+            "anything" fallback. For hosts whose adaptive ladder is VP9-only
+            while their progressive MP4 is H.264 (Instagram, Facebook), that
+            file is the one that plays inline; the engine reports no codec for
+            it, so by codec alone it would lose. See
+            :data:`MUXED_NOT_INCOMPATIBLE`.
 
     Returns:
         A yt-dlp format expression. Alternatives are separated by ``/`` so that
@@ -45,7 +54,8 @@ def build_format_expression(selection: FormatSelection) -> str:
         return _video_only(selection)
 
     if selection.allow_merge:
-        return f"{_merged(selection)}/{_best_single(selection)}"
+        merged = _merged(selection, muxed_before_fallback=muxed_before_fallback)
+        return f"{merged}/{_best_single(selection)}"
     return _best_single(selection)
 
 
@@ -87,8 +97,26 @@ few desktop clients still hand it to a system decoder that may be missing.
 COMPATIBLE_AUDIO: Final[str] = "[acodec^=mp4a]"
 """AAC. The audio half of the same bargain."""
 
+MUXED_NOT_INCOMPATIBLE: Final[str] = "[vcodec!^=?vp0][vcodec!^=?av01]"
+"""A muxed file whose codec is *not declared* VP9 or AV1 - unknown passes.
 
-def _merged(selection: FormatSelection) -> str:
+The ``?`` makes an absent codec match: Instagram's progressive renditions and
+Facebook's ``sd``/``hd`` carry no codec field at all, and they are the H.264
+files (2026-10-01, ffprobe on both). Height is loosened the same way where it
+is applied, because those files carry no frame size either."""
+
+
+def _loose_constraints(selection: FormatSelection) -> str:
+    """Return the shared filters with unknown height and size admitted."""
+    filters: list[str] = []
+    if selection.max_height is not None:
+        filters.append(f"[height<=?{selection.max_height}]")
+    if selection.max_filesize_bytes is not None:
+        filters.append(f"[filesize<?{selection.max_filesize_bytes}]")
+    return "".join(filters)
+
+
+def _merged(selection: FormatSelection, *, muxed_before_fallback: bool = False) -> str:
     """Return an expression for separate video and audio streams.
 
     When compatibility is asked for, H.264 + AAC is tried **first**, H.265 + AAC
@@ -111,6 +139,8 @@ def _merged(selection: FormatSelection) -> str:
         return fallback
     tiers = [f"bv*{COMPATIBLE_VIDEO}{constraints}+ba{COMPATIBLE_AUDIO}"]
     tiers.extend(f"bv*{hevc}{constraints}+ba{COMPATIBLE_AUDIO}" for hevc in COMPATIBLE_VIDEO_HEVC)
+    if muxed_before_fallback:
+        tiers.append(f"b{MUXED_NOT_INCOMPATIBLE}{_loose_constraints(selection)}")
     tiers.append(fallback)
     return "/".join(tiers)
 

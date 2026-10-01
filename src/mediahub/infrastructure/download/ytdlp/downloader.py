@@ -685,6 +685,7 @@ class YtDlpDownloader:
         "_address_guard",
         "_factory",
         "_inspector",
+        "_prefer_muxed_hosts",
         "_proton",
         "_proxy_policy",
         "_settings",
@@ -805,6 +806,9 @@ class YtDlpDownloader:
         on_progress: ProgressCallback | None = None,
         cancellation: CancellationToken | None = None,
     ) -> DownloadResult:
+        self._prefer_muxed_hosts = frozenset(
+            host.lower().lstrip(".") for host in settings.prefer_muxed_hosts if host
+        )
         """Download the requested rendition into ``workspace``."""
         validated = self._validate(request.url)
         started_at = datetime.now(UTC)
@@ -1105,7 +1109,10 @@ class YtDlpDownloader:
             self._settings,
             request,
             directory=workspace.directory(),
-            format_expression=build_format_expression(request.selection),
+            format_expression=build_format_expression(
+                request.selection,
+                muxed_before_fallback=_matches(validated.host, self._prefer_muxed_hosts),
+            ),
             progress_hook=bridge.on_download_hook,
             postprocessor_hook=bridge.on_postprocessor_hook,
             proxy=proxy,
