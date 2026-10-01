@@ -32,6 +32,7 @@ import threading
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from loguru import logger
@@ -77,7 +78,6 @@ from mediahub.infrastructure.download.ytdlp.thumbnails import attach_thumbnail_f
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager
-    from pathlib import Path
 
     from mediahub.application.common.cancellation import CancellationToken
     from mediahub.application.download.ports import (
@@ -613,6 +613,23 @@ class YoutubeDLLike(Protocol):
         ...
 
 
+_COOKIE_JAR_MODE: Final[int] = 0o600
+
+
+def _restore_cookie_jar_mode(path: object) -> None:
+    """Put the cookie jar back to owner-only after the engine has rewritten it.
+
+    yt-dlp saves the jar when it closes, through the process umask, so after
+    every probe and fetch the file came out 0644 (0640 while the umask was
+    0o027). The credential store writes it 0600; this keeps it there. The
+    jar is never handed to the Bot API server, so nothing else needs to read it.
+    """
+    if not isinstance(path, str):
+        return
+    with contextlib.suppress(OSError):
+        Path(path).chmod(_COOKIE_JAR_MODE)
+
+
 def default_youtube_dl_factory(options: Mapping[str, Any]) -> YoutubeDLLike:
     """Build a real ``YoutubeDL`` instance.
 
@@ -1065,6 +1082,7 @@ class YtDlpDownloader:
         finally:
             with contextlib.suppress(Exception):
                 engine.close()
+            _restore_cookie_jar_mode(options.get("cookiefile"))
 
         if not info:
             message = f"'{validated.value}' returned no metadata"
@@ -1107,6 +1125,7 @@ class YtDlpDownloader:
         finally:
             with contextlib.suppress(Exception):
                 engine.close()
+            _restore_cookie_jar_mode(options.get("cookiefile"))
 
         if not info:
             message = f"'{validated.value}' produced no download"
