@@ -84,6 +84,34 @@ def _codec(info: Mapping[str, Any], key: str) -> str | None:
     return value
 
 
+def _declared_absent(info: Mapping[str, Any], key: str) -> bool:
+    """Return whether the engine said this stream is *absent* (``"none"``).
+
+    yt-dlp uses two different values: the string ``"none"`` means "this format
+    has no such stream", a missing key or ``None`` means "I do not know what the
+    codec is". :func:`_codec` folds both to ``None`` because neither is a codec
+    name, but the two must not be read the same way when deciding whether a
+    format carries video at all.
+    """
+    raw = info.get(key)
+    return isinstance(raw, str) and raw.strip().lower() == _NONE_CODEC
+
+
+def _looks_like_video(entry: Mapping[str, Any]) -> bool:
+    """Return whether a format with an *unknown* video codec still carries video.
+
+    Twitch clips, Snapchat Spotlight and some Facebook renditions are published
+    as plain progressive MP4s whose codecs the extractor does not inspect, so
+    ``vcodec`` and ``acodec`` are both ``None`` while ``height`` is 1080. Until
+    2026-10-01 these were dropped as "no video", the probe offered nothing, and
+    the request was refused with "this source offers nothing that can be
+    fetched". A frame size is proof enough of a picture.
+    """
+    if _declared_absent(entry, "vcodec"):
+        return False
+    return _integer(entry, "height") is not None or _integer(entry, "width") is not None
+
+
 def _upload_date(info: Mapping[str, Any]) -> datetime | None:
     """Return the publication date as an aware UTC datetime, when parsable."""
     timestamp = info.get("timestamp")
@@ -190,7 +218,7 @@ def split_formats(
     for entry in entries:
         if not _is_usable(entry):
             continue
-        has_video = _codec(entry, "vcodec") is not None
+        has_video = _codec(entry, "vcodec") is not None or _looks_like_video(entry)
         has_audio = _codec(entry, "acodec") is not None
         if has_video:
             videos.append(to_video_format(entry))

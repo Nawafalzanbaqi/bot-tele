@@ -112,6 +112,27 @@ class TestFormatMapping:
         assert track.language == "en"
         assert track.filesize_is_estimate is False
 
+    def test_unknown_codecs_with_a_frame_size_are_video(self) -> None:
+        """Twitch clips: vcodec and acodec both None (unknown), height known."""
+        videos, audios = split_formats(
+            [
+                {"format_id": "1080", "ext": "mp4", "height": 1080},
+                {"format_id": "720", "ext": "mp4", "height": 720, "vcodec": None, "acodec": None},
+            ]
+        )
+
+        assert [video.format_id for video in videos] == ["1080", "720"]
+        assert audios == ()
+
+    def test_a_stream_declared_absent_is_not_video(self) -> None:
+        """"none" is a statement; a missing codec is a shrug. Only the shrug counts."""
+        videos, audios = split_formats(
+            [{"format_id": "a", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "height": 0}]
+        )
+
+        assert videos == ()
+        assert [audio.format_id for audio in audios] == ["a"]
+
     def test_missing_fields_become_none(self) -> None:
         videos, _ = split_formats([{"format_id": "x", "vcodec": "avc1"}])
 
