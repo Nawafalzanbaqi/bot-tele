@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import os
 import signal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from loguru import logger
 
@@ -34,14 +34,30 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.shared.config.settings import Settings
 
 
+HANDOFF_UMASK: Final[int] = 0o022
+"""The process umask the download engines inherit.
+
+The downloaded file is not uploaded by this process: it is handed to the local
+Bot API server **by path**, and that server runs as its own user (uid 101) in
+its own container, where the workspace volume is mounted read-only. It opens the
+file with its own credentials, so the file - and the lease directory above it -
+must be readable by *other*. That is what the default 0o022 gives: directories
+0755, engine files 0644.
+
+0o027 was tried on 2026-09-28 to drop world-read, on the reasoning that
+``group_add: "101"`` in docker-compose.pi.yml would keep the hand-off working.
+It does not: that line puts *this* process into the server's group so this
+process can read what the server stores (an uploaded cookie jar); it does not
+put the server into this process's group 1001, which is what every engine file
+is created with. Every delivery after that change failed with
+``Bad Request: can't get stat about the file`` while the download itself
+succeeded, and nothing reached the chat until 2026-10-01. The regression test
+in ``tests/unit/presentation/test_telegram_main.py`` pins this value."""
+
+
 def main() -> None:
     """Start the gateway, or refuse to start with a reason."""
-    # The workspace creates its own files 0600, but the download engines create
-    # theirs with the process umask - 0644 by default, so every downloaded
-    # file was world-readable inside the container until deleted. 0o027 keeps
-    # group read, which the Bot API server's gid-101 hand-off needs
-    # (docker-compose.pi.yml, group_add), and drops the rest.
-    os.umask(0o027)
+    os.umask(HANDOFF_UMASK)
     settings = get_settings()
     configure_logging(settings)
 
