@@ -27,6 +27,33 @@ class TestEngineUrl:
         assert "share_id" not in rewritten
 
     @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://vimeo.com/393756517", "https://player.vimeo.com/video/393756517"),
+            ("https://www.vimeo.com/76979871/", "https://player.vimeo.com/video/76979871"),
+            ("https://vimeo.com/393756517?share=copy", "https://player.vimeo.com/video/393756517"),
+            (
+                "https://vimeo.com/123456789/abcdef0123",
+                "https://player.vimeo.com/video/123456789?h=abcdef0123",
+            ),
+        ],
+    )
+    def test_a_plain_vimeo_link_goes_to_the_player(self, url: str, expected: str) -> None:
+        """The plain page demands a login since 2026; the player does not."""
+        assert engine_url(url) == expected
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://vimeo.com/channels/keypeele/75629013",
+            "https://player.vimeo.com/video/393756517",
+            "https://vimeo.com/showcase/1234567",
+        ],
+    )
+    def test_vimeo_links_that_already_work_are_untouched(self, url: str) -> None:
+        assert engine_url(url) == url
+
+    @pytest.mark.parametrize(
         "url",
         [
             f"https://www.snapchat.com/spotlight/{SPOTLIGHT_ID}",
