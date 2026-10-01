@@ -1,0 +1,13 @@
+[
+  {"platform": "YouTube", "kind": "normal", "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"},
+  {"platform": "YouTube", "kind": "Shorts", "url": "https://www.youtube.com/shorts/CEJXqm2eiJ0"},
+  {"platform": "YouTube", "kind": "1080p+ (4K source)", "url": "https://www.youtube.com/watch?v=LXb3EKWsInQ"},
+  {"platform": "X", "kind": "images", "url": "https://x.com/NASA/status/2040059740848283920"},
+  {"platform": "TikTok", "kind": "video", "url": "https://www.tiktok.com/@chemteacherphil/video/7008953610872605957"},
+  {"platform": "Instagram", "kind": "reel", "url": "https://www.instagram.com/reel/Dbn-XJhk0_-/"},
+  {"platform": "Snapchat", "kind": "spotlight", "url": "https://www.snapchat.com/@al20258600/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYdWxvYnBhaHR3AaARhNpsAaARhNmWAAAAAQ"},
+  {"platform": "Reddit", "kind": "v.redd.it", "url": "https://www.reddit.com/r/videos/comments/6rrwyj/that_small_heart_attack/"},
+  {"platform": "Pinterest", "kind": "video pin", "url": "https://www.pinterest.com/pin/487022147218128037/"},
+  {"platform": "Twitch", "kind": "clip", "url": "https://www.twitch.tv/twitch/clip/RefinedDelightfulCoyoteRickroll-npKh5YyUY4DWmo5J"},
+  {"platform": "SoundCloud", "kind": "track", "url": "https://soundcloud.com/forss/flickermood"}
+]
