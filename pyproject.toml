@@ -58,7 +58,9 @@ Source = "https://github.com/your-org/mediahub"
 mediahub = "mediahub.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mediahub"]
+# yt_dlp_plugins is a namespace package yt-dlp discovers on sys.path: custom
+# extractors that survive the weekly engine bump (see src/yt_dlp_plugins/).
+packages = ["src/mediahub", "src/yt_dlp_plugins"]
 
 # ---------------------------------------------------------------------------
 # Ruff - linting (formatting is delegated to Black)
@@ -131,6 +133,9 @@ ignore = [
     "SLF001",
 ]
 "migrations/**/*.py" = ["ANN", "D", "ERA001", "INP001"]
+# yt-dlp plugins must be a *namespace* package (no __init__.py) to be found, and
+# an extractor overrides the engine's own underscored hooks by design.
+"src/yt_dlp_plugins/**/*.py" = ["INP001", "SLF001"]
 # ASYNC109 objects to a `timeout` parameter on an async function. Telegram's
 # long-poll timeout is a Bot API parameter sent to the server, not an asyncio
 # deadline, and a drain budget is a deliberate part of the shutdown contract.
