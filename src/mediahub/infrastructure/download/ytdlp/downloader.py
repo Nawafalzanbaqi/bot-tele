@@ -72,6 +72,7 @@ from mediahub.infrastructure.download.ytdlp.progress import (
     SizeCeilingExceeded,
 )
 from mediahub.infrastructure.download.ytdlp.rewrites import engine_url
+from mediahub.infrastructure.download.ytdlp.thumbnails import attach_thumbnail_fixer
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -632,6 +633,9 @@ def default_youtube_dl_factory(options: Mapping[str, Any]) -> YoutubeDLLike:
         else:
             prepared["impersonate"] = resolved
     engine: YoutubeDLLike = _YoutubeDL(prepared)
+    # Thumbnails whose URL ends in a token would abort the whole download at
+    # the engine's extension check; name them before it looks (thumbnails.py).
+    attach_thumbnail_fixer(engine)
     return engine
 
 
