@@ -107,7 +107,8 @@ async def run(links: list[dict[str, str]], out: Path, probe_only: bool) -> None:
                         result = await acquire_media.execute(
                             AcquireMediaCommand(
                                 url=summary.url,
-                                quality_key=AUTO_KEY,
+                                # "quality": "max" in a link entry mirrors /max.
+                                quality_key=link.get("quality", AUTO_KEY),
                                 target=DeliveryTarget(
                                     provider="telegram",
                                     address=TargetAddress(provider="telegram", opaque={"chat": CHAT}),
