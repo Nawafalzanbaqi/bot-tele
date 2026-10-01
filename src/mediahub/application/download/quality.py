@@ -37,6 +37,12 @@ streams at all. They are not unfetchable; there is simply nothing to pick, so
 the menu offers one entry rather than none.
 """
 AUTO_KEY: Final[str] = "auto"
+MAX_KEY: Final[str] = "max"
+"""The best rendition the source offers, whatever its codec - ``/max``.
+
+Never offered as a button and never weighed against the ceiling: the person
+asked for the most, and the engine still enforces the real limit while
+streaming. A VP9/AV1 result goes as a document, and the card says so."""
 """Means "decide for me: the best rung that can actually be delivered".
 
 Resolved by :func:`resolve_auto` at acquisition time rather than when the menu
@@ -195,6 +201,8 @@ def selection_for(
             renditions may well have changed, and honouring a key that is no
             longer in the list would download something nobody chose.
     """
+    if key == MAX_KEY:
+        return FormatSelection.best(allow_merge=allow_merge, prefer_compatible=False)
     chosen = next((option for option in options if option.key == key), None)
     if chosen is None:
         message = f"'{key}' is no longer an available quality for this source"

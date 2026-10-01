@@ -16,6 +16,7 @@ from mediahub.application.download.ports import (
 from mediahub.application.download.quality import (
     AUDIO_KEY,
     BEST_KEY,
+    MAX_KEY,
     MAX_OPTIONS,
     ORIGINAL_KEY,
     build_quality_options,
@@ -166,6 +167,23 @@ class TestSelectionFor:
         options = build_quality_options(metadata(audio_formats=(AudioFormat(format_id="a"),)))
 
         assert not selection_for(AUDIO_KEY, options, allow_merge=True).allow_merge
+
+
+class TestMaxKey:
+    """``/max``: the most the source has, codec be damned."""
+
+    def test_max_is_the_unbounded_selection_without_the_codec_preference(self) -> None:
+        options = build_quality_options(metadata(video_formats=(video(1080, 90), video(720, 40))))
+
+        selection = selection_for(MAX_KEY, options, allow_merge=True, prefer_compatible=True)
+
+        assert selection.preference is FormatPreference.BEST
+        assert selection.max_height is None
+        assert selection.allow_merge is True
+        assert selection.prefer_compatible is False, "the 4K VP9 file is the point"
+
+    def test_max_needs_no_offered_option(self) -> None:
+        assert selection_for(MAX_KEY, (), allow_merge=False).preference is FormatPreference.BEST
 
 
 class TestSizesAreDeliveredSizes:

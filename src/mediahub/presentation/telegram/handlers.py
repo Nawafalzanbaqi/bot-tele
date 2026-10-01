@@ -32,7 +32,7 @@ from mediahub.application.download.dto import (
     GetHistoryQuery,
     ProbeSourceQuery,
 )
-from mediahub.application.download.quality import AUTO_KEY
+from mediahub.application.download.quality import AUTO_KEY, MAX_KEY
 from mediahub.domain.access.enums import Action
 from mediahub.domain.common.errors import DomainError
 from mediahub.presentation.telegram import formatters
@@ -250,8 +250,27 @@ class TelegramHandlers:
             await self._on_cancel(intent, principal)
         elif intent.command == "vpn":
             await self._on_vpn(intent, principal)
+        elif intent.command == "max":
+            await self._on_max(intent, principal)
         else:
             await self._say(intent, formatters.render_help())
+
+    async def _on_max(self, intent: Intent, principal: Principal) -> None:
+        """Fetch a link at the best rendition its source offers, whatever the codec.
+
+        The ordinary path prefers what plays inline, which on a 4K source means
+        the 1080p H.264 file. This is for the person who wants the 4K file and
+        does not mind that it arrives as a document.
+        """
+        argument = (intent.argument or "").strip()
+        if not argument.lower().startswith(URL_PREFIXES):
+            await self._say(intent, formatters.render_help())
+            return
+        await self._on_text(
+            replace(intent, kind=IntentKind.TEXT, text=argument, command=None, argument=None),
+            principal,
+            quality_key=MAX_KEY,
+        )
 
     async def _on_vpn(self, intent: Intent, principal: Principal) -> None:
         """Fetch a link through the egress, and route its host that way from now on.
@@ -333,8 +352,14 @@ class TelegramHandlers:
         summary = await self._services.describe_cookies.execute()
         await self._say(intent, formatters.render_cookie_status(summary))
 
-    async def _on_text(self, intent: Intent, principal: Principal) -> None:
-        """Treat free text as a candidate source."""
+    async def _on_text(
+        self, intent: Intent, principal: Principal, *, quality_key: str = AUTO_KEY
+    ) -> None:
+        """Treat free text as a candidate source.
+
+        ``quality_key`` is what a command such as ``/max`` has already decided;
+        anything other than ``auto`` skips the keyboard and fetches at once.
+        """
         text = (intent.text or "").strip()
         if not text.lower().startswith(URL_PREFIXES):
             await self._say(intent, formatters.render_help())
@@ -369,7 +394,7 @@ class TelegramHandlers:
         # When the answer to "which quality?" is always "the best one that will
         # fit", asking is a tap that delays every download and can be answered
         # wrong. The keyboard is still built when the deployment wants a choice.
-        automatic = offerable and self._services.auto_best_quality
+        automatic = offerable and (self._services.auto_best_quality or quality_key != AUTO_KEY)
         markup = (
             None
             if automatic or not offerable
@@ -384,7 +409,7 @@ class TelegramHandlers:
         session.prompt_message_id = message_id
 
         if automatic:
-            self._spawn(self._acquire(session, principal, AUTO_KEY))
+            self._spawn(self._acquire(session, principal, quality_key))
             return
         if not offerable:
             self._services.sessions.discard(session.token)
@@ -635,6 +660,7 @@ COMMAND_ACTIONS: Final[dict[str, Action]] = {
     "cancel": Action.CANCEL_ACQUISITION,
     # Submitting a link, with a routing instruction attached.
     "vpn": Action.SUBMIT_SOURCE,
+    "max": Action.SUBMIT_SOURCE,
 }
 """Commands needing something other than the mildest action.
 

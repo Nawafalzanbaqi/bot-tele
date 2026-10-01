@@ -735,6 +735,40 @@ class TestProgressPresenter:
 
 
 # --------------------------------------------------------------------------- #
+# /max                                                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestMaxCommand:
+    async def test_a_link_is_probed_and_fetched_at_max_without_a_keyboard(self) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe()
+        acquire = FakeAcquire()
+        handlers, _ = build(messenger, probe=probe, acquire=acquire, auto=False)
+
+        await handle(handlers, message_update("/max https://example.com/watch?v=1"))
+        await handlers.drain(timeout=1)
+
+        assert probe.calls == ["https://example.com/watch?v=1"]
+        assert [command.quality_key for command in acquire.commands] == ["max"]
+        assert all(call.reply_markup is None for call in messenger.sent), "no quality keyboard"
+
+    async def test_without_a_link_the_help_is_shown(self) -> None:
+        messenger = FakeMessenger()
+        probe = FakeProbe()
+        handlers, _ = build(messenger, probe=probe)
+
+        await handle(handlers, message_update("/max"))
+
+        assert "/max" in messenger.sent[0].text
+        assert probe.calls == []
+
+    def test_max_is_a_source_submission_for_access_purposes(self) -> None:
+        assert COMMAND_ACTIONS["max"] is Action.SUBMIT_SOURCE
+        assert "/max" in formatters.render_help()
+
+
+# --------------------------------------------------------------------------- #
 # /vpn                                                                         #
 # --------------------------------------------------------------------------- #
 

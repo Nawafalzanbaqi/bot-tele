@@ -20,12 +20,13 @@ from loguru import logger
 
 from mediahub.application.delivery.errors import ArtifactTooLargeError, DeliveryError
 from mediahub.application.delivery.ports import DeliveryKind, DeliveryRequest
-from mediahub.application.download.dto import AcquisitionSummary, StageTimings
+from mediahub.application.download.dto import AcquisitionSummary, QualityOption, StageTimings
 from mediahub.application.download.errors import FormatUnavailableError
 from mediahub.application.download.journal import JournalEntry
 from mediahub.application.download.ports import DownloadRequest
 from mediahub.application.download.quality import (
     AUTO_KEY,
+    MAX_KEY,
     ORIGINAL_KEY,
     build_quality_options,
     is_compatible_codec,
@@ -45,7 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         DeliveryProgressCallback,
         DeliveryRouter,
     )
-    from mediahub.application.download.dto import AcquireMediaCommand, QualityOption
+    from mediahub.application.download.dto import AcquireMediaCommand
     from mediahub.application.download.journal import AcquisitionJournal
     from mediahub.application.download.ports import (
         DownloaderPort,
@@ -288,6 +289,17 @@ class AcquireMedia:
         """
         if key == AUTO_KEY:
             return resolve_auto(options, ceiling=ceiling)
+        if key == MAX_KEY:
+            # Not an offered option: the most the source has, named after the
+            # frame once it is known (see _delivered_label).
+            return QualityOption(
+                key=MAX_KEY,
+                label="Max",
+                format_id=None,
+                height=None,
+                approx_bytes=None,
+                is_audio_only=False,
+            )
         chosen = next((option for option in options if option.key == key), None)
         if chosen is None:
             message = f"'{key}' is no longer an available quality for this source"

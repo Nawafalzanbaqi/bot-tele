@@ -539,6 +539,29 @@ class TestDeliveryPolicy:
 
         assert summary.quality_label == "1080p"
 
+    async def test_max_takes_the_best_rendition_whatever_the_codec(self, tmp_path: Path) -> None:
+        """/max on a 4K VP9 source: the 4K file, as a document, named after its frame."""
+        delivery = FakeDeliveryProvider(maximum_file_size=100_000_000)
+        use_case = self._use_case(
+            tmp_path,
+            delivery=delivery,
+            taken={
+                "format_id": "313",
+                "ext": "mp4",
+                "vcodec": "vp09.00.51.08",
+                "acodec": "opus",
+                "width": 3840,
+                "height": 2160,
+            },
+        )
+
+        summary = await self._run(use_case, "max")
+
+        assert summary.quality_label == "2160p"
+        assert summary.sent_as_document is True
+        assert summary.capped_from is None
+        assert delivery.delivered[0].kind is DeliveryKind.DOCUMENT
+
     async def test_a_rung_the_person_chose_is_never_called_capped(self, tmp_path: Path) -> None:
         delivery = FakeDeliveryProvider(maximum_file_size=20_000_000)
         use_case = self._use_case(
