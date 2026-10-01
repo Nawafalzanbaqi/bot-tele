@@ -84,10 +84,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         DownloadRequest,
         MediaMetadata,
         ProgressCallback,
+        SelectedFormat,
     )
     from mediahub.application.workspace.ports import ArtifactRef, WorkspaceScope
     from mediahub.domain.sources.value_objects import ValidatedUrl
-    from mediahub.infrastructure.download.ytdlp.inspection import StreamInspector
+    from mediahub.infrastructure.download.ytdlp.inspection import StreamInspector, StreamReport
     from mediahub.infrastructure.security.address_guard import DnsAddressGuard
     from mediahub.shared.config.settings import DownloadSettings
 
@@ -946,7 +947,7 @@ class YtDlpDownloader:
                 max_bytes=max_bytes,
                 egress=used,
             )
-            await self._inspect(result, workspace, url=validated.value)
+            result = await self._inspect(result, workspace, url=validated.value)
         except BaseException:
             self._discard_new_files(workspace, existing)
             raise
@@ -1447,21 +1448,26 @@ class YtDlpDownloader:
 
     async def _inspect(
         self, result: DownloadResult, workspace: WorkspaceScope, *, url: str
-    ) -> None:
+    ) -> DownloadResult:
         """Look inside the primary file and refuse it if it is not what was asked for.
 
         Size was checked already; this is the part the size cannot tell -
         whether the bytes decode, and whether there are as many seconds of them
         as the source promised. A skipped inspection (no tool) is logged, not
         failed: it is a fact about the device.
+
+        Returns the result with what the inspection learned filled in where
+        the extractor said nothing: frame size and codec. Instagram's
+        progressive files and every Threads file arrive without either, and
+        the card then named the rung asked for rather than the frame taken.
         """
         if self._inspector is None:
-            return
+            return result
         primary = result.primary
         report = await self._inspector.inspect(workspace.path_for(primary.name))
         if report is None:
             logger.bind(name=primary.name).debug("Completeness check skipped")
-            return
+            return result
         verify_complete(
             report,
             expected_seconds=result.metadata.duration_seconds,
@@ -1476,6 +1482,7 @@ class YtDlpDownloader:
             audio=list(report.audio_codecs),
             size=f"{report.width}x{report.height}" if report.width else None,
         ).info("Delivered file verified complete")
+        return replace(result, selected_format=_with_inspection(result.selected_format, report))
 
     @staticmethod
     def _discard_new_files(workspace: WorkspaceScope, existing: set[str]) -> None:
@@ -1484,6 +1491,37 @@ class YtDlpDownloader:
             if name not in existing:
                 with contextlib.suppress(Exception):
                     workspace.remove(name)
+
+
+_PROBE_CODEC_NAMES: Final[dict[str, str]] = {
+    "h264": "avc1",
+    "hevc": "hvc1",
+    "vp9": "vp09",
+    "av1": "av01",
+}
+"""ffprobe's codec names, in the vocabulary the quality policy reads."""
+
+
+def _with_inspection(taken: SelectedFormat, report: StreamReport) -> SelectedFormat:
+    """Fill the frame size and codec the extractor left unknown from what ffprobe saw."""
+    width = taken.width if taken.width is not None else report.width
+    height = taken.height if taken.height is not None else report.height
+    codec = taken.video_codec
+    audio_only = taken.is_audio_only
+    if codec is None and report.video_codecs:
+        # The extractor declared nothing, so the mapping called it audio-only;
+        # the file has a picture, and this is what it is encoded with.
+        seen = report.video_codecs[0].lower()
+        codec = _PROBE_CODEC_NAMES.get(seen, seen)
+        audio_only = False
+    if (width, height, codec, audio_only) == (
+        taken.width,
+        taken.height,
+        taken.video_codec,
+        taken.is_audio_only,
+    ):
+        return taken
+    return replace(taken, width=width, height=height, video_codec=codec, is_audio_only=audio_only)
 
 
 def _album_file_names(info: Mapping[str, Any], produced: Sequence[str]) -> list[str]:
