@@ -139,6 +139,26 @@ class ContentRemovedError(DownloadError):
     kind: ClassVar[FailureKind] = FailureKind.PERMANENT
 
 
+class SiteChallengeError(DownloadError):
+    """The site answered with a browser challenge instead of the content.
+
+    A JavaScript or Cloudflare-style interstitial ("checking your browser",
+    PornHub's PhantomJS gate) is aimed at the *client*, not at the content: the
+    same link opens in a browser, and from a different exit with a browser
+    fingerprint the engine often gets through. Until 2026-10-01 the engine's
+    wording for this ("PhantomJS not found") matched the bare "not found" of
+    :class:`ContentRemovedError`, so the user was told the post was deleted and
+    the egress logic tried a third country for something no country changes.
+
+    Permanent for the retry loop (the same exit gets the same page again) and
+    escalated once to the egress by the adapter, which is where it is cured
+    when it is curable.
+    """
+
+    code: ClassVar[str] = "site_challenge"
+    kind: ClassVar[FailureKind] = FailureKind.PERMANENT
+
+
 class NoPlayableMediaError(DownloadError):
     """The post was read successfully and holds nothing this engine can fetch.
 

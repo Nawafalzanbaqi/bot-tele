@@ -23,6 +23,7 @@ from mediahub.application.download.errors import (
     NoPlayableMediaError,
     ProviderError,
     RateLimitedError,
+    SiteChallengeError,
     UnsupportedProviderError,
 )
 from mediahub.application.download.ports import DownloadRequest, FormatSelection
@@ -271,11 +272,24 @@ class TestErrorClassification:
             ("HTTP Error 503: Service Unavailable", ProviderError),
             ("The read operation timed out", ProviderError),
             ("[Errno 104] Connection reset by peer", ConnectionBlockedError),
+            # A browser challenge in front of the content, in the engine's
+            # own words for PornHub and in Cloudflare's interstitial wording.
+            ("PhantomJS not found, please install it", SiteChallengeError),
+            ("Just a moment... Checking your browser before accessing", SiteChallengeError),
             ("Something nobody has ever seen before", DownloadFailedError),
         ],
     )
     def test_messages_map_to_the_right_class(self, message: str, expected: type[Exception]) -> None:
         assert isinstance(classify(Exception(message), url="u"), expected)
+
+    def test_a_js_challenge_is_not_read_as_a_removed_post(self) -> None:
+        """"PhantomJS not found" carried the bare "not found" of a deleted post until 2026-10-01."""
+        message = "ERROR: [PornHub] 1: PhantomJS not found, please install it"
+        error = classify(Exception(message), url="u")
+
+        assert not isinstance(error, ContentRemovedError)
+        assert error.code == "site_challenge"
+        assert not error.is_retryable, "the same exit gets the same page again"
 
     def test_unknown_failures_stay_retryable(self) -> None:
         error = classify(Exception("a novel failure"), url="u")

@@ -47,6 +47,7 @@ from mediahub.application.download.errors import (
     MetadataUnavailableError,
     PlaylistNotAllowedError,
     ProviderError,
+    SiteChallengeError,
     SizeLimitExceededError,
 )
 from mediahub.application.download.ports import (
@@ -499,7 +500,10 @@ or a deleted post is deliberately not here - they fail identically everywhere.
 
 def _should_escalate(error: DownloadError) -> bool:
     """Return whether a failure is one a different exit address might cure."""
-    if isinstance(error, (ConnectionBlockedError, GeoRestrictedError)):
+    if isinstance(error, (ConnectionBlockedError, GeoRestrictedError, SiteChallengeError)):
+        # A browser challenge is aimed at the client, and the proxied attempt
+        # presents a browser fingerprint (ProxyPolicy.impersonation_for), which
+        # is what gets PornHub's JS gate out of the way on this deployment.
         return True
     text = str(error).lower()
     return any(signature in text for signature in _ESCALATION_SIGNATURES)

@@ -36,6 +36,7 @@ from mediahub.application.download.errors import (
     NoPlayableMediaError,
     ProviderError,
     RateLimitedError,
+    SiteChallengeError,
     UnsupportedProviderError,
 )
 
@@ -62,6 +63,23 @@ _PERMANENT_MARKERS: Final[tuple[tuple[tuple[str, ...], type[DownloadError]], ...
             "playready",
         ),
         DrmProtectedError,
+    ),
+    # A browser challenge in front of the content. Second, and before every
+    # rule below, because the engine's wording for it ("PhantomJS not found,
+    # please install it") contains the bare "not found" that marks a removed
+    # post further down - which is what it was read as until 2026-10-01.
+    (
+        (
+            "phantomjs",
+            "javascript challenge",
+            "js challenge",
+            "checking your browser",
+            "just a moment",
+            "enable javascript and cookies",
+            "cloudflare challenge",
+            "ddos-guard",
+        ),
+        SiteChallengeError,
     ),
     (("unsupported url", "no suitable extractor", "is not a valid url"), UnsupportedProviderError),
     # A rendition that was asked for and does not exist - a stale format id from

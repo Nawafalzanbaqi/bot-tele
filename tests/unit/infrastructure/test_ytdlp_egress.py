@@ -19,6 +19,7 @@ from mediahub.application.download.errors import (
     GeoRestrictedError,
     MetadataUnavailableError,
     ProviderError,
+    SiteChallengeError,
 )
 from mediahub.application.download.ports import DownloadRequest, FormatSelection
 from mediahub.domain.sources.policies import UrlPolicy
@@ -101,8 +102,9 @@ class TestWhatEscalates:
             "Unable to extract universal data for rehydration",
             "The uploader has not made this video available in your country",
             "[Errno 104] Connection reset by peer",
+            "PhantomJS not found, please install it",
         ],
-        ids=["403", "403-webpage", "ip-blocked", "bot-wall", "geo", "reset"],
+        ids=["403", "403-webpage", "ip-blocked", "bot-wall", "geo", "reset", "js-challenge"],
     )
     async def test_an_address_level_refusal_is_retried_through_the_egress(
         self, message: str
@@ -307,6 +309,7 @@ REMOVED = "This video has been removed"
 GEO = "The uploader has not made this video available in your country"
 PRIVATE = "This video is private"
 RESET = "[Errno 104] Connection reset by peer"
+CHALLENGE = "PhantomJS not found, please install it"
 
 
 class TestTheThirdTier:
@@ -373,6 +376,17 @@ class TestTheThirdTier:
 
         assert proton.holds == []
         assert seen == [None, PROXY]
+
+    async def test_a_browser_challenge_through_warp_gets_no_third_attempt(self) -> None:
+        """A JS gate is aimed at the client; no country changes it, and it is not "removed"."""
+        factory, seen = scripted({None: RuntimeError(CHALLENGE), PROXY: RuntimeError(CHALLENGE)})
+        proton = FakeProton()
+
+        with pytest.raises(SiteChallengeError):
+            await third_tier(settings(), factory, proton).probe(URL)
+
+        assert proton.holds == []
+        assert seen == [None, PROXY], "direct, then WARP with a browser fingerprint, then stop"
 
     async def test_a_private_answer_from_a_country_stops_the_search(self) -> None:
         factory, _seen = scripted(
