@@ -370,6 +370,21 @@ class TestResolveAuto:
 
         assert resolve_auto(options, ceiling=10).is_audio_only
 
+    def test_a_source_below_every_rung_still_resolves_to_its_video(self) -> None:
+        """A 352x640 clip offers no rung; that is not "every rung is too large"."""
+        options = build_quality_options(
+            metadata(
+                video_formats=(
+                    VideoFormat(format_id="v", width=352, height=640, filesize_bytes=3_000_000),
+                ),
+                audio_formats=(AudioFormat(format_id="a", filesize_bytes=200_000),),
+            )
+        )
+
+        assert [option.key for option in options] == [BEST_KEY, AUDIO_KEY]
+        chosen = resolve_auto(options, ceiling=2000 * 1024 * 1024)
+        assert chosen.key == BEST_KEY, "the video exists; audio is for when video cannot fit"
+
     def test_video_is_preferred_over_audio_when_both_fit(self) -> None:
         options = build_quality_options(
             metadata(

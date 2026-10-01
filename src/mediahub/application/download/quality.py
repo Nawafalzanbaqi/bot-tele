@@ -260,14 +260,22 @@ def resolve_auto(options: Sequence[QualityOption], *, ceiling: int | None) -> Qu
         # Rungs are emitted tallest-first, so the first that fits is the best.
         return fits[0]
 
+    if not rungs and unbounded is not None:
+        # No rung was *offered*, which is not the same as every rung being too
+        # large: a 352x640 clip sits below the lowest rung on its short side,
+        # so the ladder is empty while the video plainly exists. Until
+        # 2026-10-01 this fell through to the audio fallback below and a
+        # Reddit clip arrived as a 190 KB m4a. The honest answer is the best
+        # rendition there is; the engine still enforces the ceiling while
+        # streaming.
+        return unbounded
+
     # Every known rung is too large. Sound is a real answer - a two-hour talk
     # that will not fit as video usually still fits as audio - and it beats
     # refusing outright.
     if audio:
         return audio[0]
-    if rungs:
-        return rungs[-1]
-    return unbounded or options[0]
+    return rungs[-1] if rungs else (unbounded or options[0])
 
 
 def _short_side(video: VideoFormat) -> int | None:
