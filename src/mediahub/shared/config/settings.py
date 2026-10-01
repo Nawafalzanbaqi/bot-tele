@@ -422,6 +422,11 @@ class DownloadSettings(_ConfigSection):
     proxy: str | None = None
     proxy_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     egress_hosts_file: Path | None = None
+    # A host learned to need the egress because a direct attempt was refused is
+    # tried directly again after this many days (0 = never). Operator pins
+    # (/vpn, the static list) do not expire. One 403 on an odd post pinned all
+    # of TikTok to the tunnel for good on 2026-10-01; this is the way back.
+    egress_learned_ttl_days: int = Field(default=7, ge=0)
     # Third egress tier: one free ProtonVPN tunnel (a second gluetun), whose
     # exit country the bot moves through gluetun's control server. All three
     # must be set for the tier to exist; the key is the control server's

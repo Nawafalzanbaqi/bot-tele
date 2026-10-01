@@ -31,7 +31,7 @@ import contextlib
 import threading
 import time
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -147,10 +147,13 @@ class ProxyPolicy:
         "_impersonate",
         "_impersonate_hosts",
         "_learned",
+        "_learned_at",
         "_listed",
         "_lock",
+        "_now",
         "_proton_countries",
         "_proxy",
+        "_ttl",
     )
 
     def __init__(
@@ -162,6 +165,8 @@ class ProxyPolicy:
         impersonate_hosts: Sequence[str] = (),
         learned_file: Path | None = None,
         proton_countries: Sequence[str] = (),
+        learned_ttl_days: int = 0,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         """Bind the policy to an egress, the hosts known to need it, and a browser fingerprint.
 
@@ -178,10 +183,19 @@ class ProxyPolicy:
                 ``None`` keeps the memory per-process.
             proton_countries: The third tier's country codes, when it exists.
                 Only used to say what ``/vpn`` may ask for.
+            learned_ttl_days: How long a host learned from a *refused direct
+                attempt* keeps its tier before the direct path is tried again;
+                ``0`` keeps it for good. Pins made by the operator never
+                expire. One 403 on an odd TikTok post routed every TikTok link
+                through the tunnel until someone noticed (2026-10-01).
+            now: Clock, for tests.
         """
         self._proxy = proxy or None
         self._listed = frozenset(host.lower().lstrip(".") for host in hosts if host)
         self._learned: dict[str, str] = {}
+        self._learned_at: dict[str, datetime] = {}
+        self._ttl = timedelta(days=learned_ttl_days) if learned_ttl_days > 0 else None
+        self._now = now or _utc_now
         self._proton_countries = tuple(code.lower() for code in proton_countries)
         self._impersonate = impersonate or None
         self._impersonate_hosts = frozenset(
@@ -219,9 +233,7 @@ class ProxyPolicy:
         """
         self._reload_if_edited()
         lowered = host.lower()
-        with self._lock:
-            learned = dict(self._learned)
-        tier = _tier_for(lowered, learned)
+        tier = _tier_for(lowered, self._active_learned())
         if tier is None and _matches(lowered, self._listed):
             tier = "warp"
         if tier is None:
@@ -253,7 +265,7 @@ class ProxyPolicy:
         """
         if self._proxy is None or self.route_for(host)[0] != "direct":
             return None
-        self._remember(host, "warp")
+        self._remember(host, "warp", learned=True)
         logger.bind(host=host).info(
             "Direct connection to this host was reset; routing it through the egress proxy"
         )
@@ -261,7 +273,7 @@ class ProxyPolicy:
 
     def learn_proton(self, host: str, country: str) -> None:
         """Remember that ``host`` worked through the third tier in ``country``."""
-        self._remember(host, f"proton:{country.lower()}")
+        self._remember(host, f"proton:{country.lower()}", learned=True)
         logger.bind(host=host, country=country).info(
             "Host answered through the ProtonVPN exit; routing it there from now on"
         )
@@ -286,34 +298,58 @@ class ProxyPolicy:
             return False
         current, country = self.route_for(host)
         current_label = current if country is None else f"{current}:{country}"
-        if current_label == tier:
+        with self._lock:
+            expiring = host.lower().lstrip(".") in self._learned_at
+        if current_label == tier and not expiring:
             return False
-        self._remember(host, tier)
+        # Same tier but learned, so it would lapse: a pin makes it stay.
+        self._remember(host, tier, learned=False)
         logger.bind(host=host, tier=tier).info("Host pinned to an egress tier")
         return True
 
     def routed(self) -> tuple[tuple[str, str], ...]:
         """Return every routed host with its tier, sorted by host."""
         self._reload_if_edited()
-        with self._lock:
-            entries = dict.fromkeys(self._listed, "warp")
-            entries.update(self._learned)
+        entries = dict.fromkeys(self._listed, "warp")
+        entries.update(self._active_learned())
         return tuple(sorted(entries.items()))
 
     @property
     def learned_hosts(self) -> tuple[str, ...]:
         """Return the hosts discovered to need an egress. Diagnostic helper."""
         self._reload_if_edited()
-        with self._lock:
-            return tuple(sorted(self._learned))
+        return tuple(sorted(self._active_learned()))
 
     # -- The file ------------------------------------------------------------
 
-    def _remember(self, host: str, tier: str) -> None:
-        """Record a host's tier and write the list out."""
+    def _remember(self, host: str, tier: str, *, learned: bool) -> None:
+        """Record a host's tier and write the list out.
+
+        ``learned`` marks an entry that came from a refused direct attempt; it
+        is stamped and expires. A pin by the operator is not stamped and stays.
+        """
+        key = host.lower().lstrip(".")
         with self._lock:
-            self._learned[host.lower().lstrip(".")] = tier
+            self._learned[key] = tier
+            if learned:
+                self._learned_at[key] = self._now()
+            else:
+                self._learned_at.pop(key, None)
         self._save()
+
+    def _active_learned(self) -> dict[str, str]:
+        """Return the learned hosts still in force: stamped entries past the TTL are ignored."""
+        with self._lock:
+            learned = dict(self._learned)
+            stamps = dict(self._learned_at)
+        if self._ttl is None:
+            return learned
+        now = self._now()
+        return {
+            host: tier
+            for host, tier in learned.items()
+            if host not in stamps or now - stamps[host] <= self._ttl
+        }
 
     def _load(self) -> None:
         """Read the learned hosts from the file, if there is one."""
@@ -334,9 +370,10 @@ class ProxyPolicy:
         except OSError:
             logger.opt(exception=True).warning("Could not read the egress host list")
             return
-        hosts = _parse_host_list(text)
+        hosts, stamps = _parse_host_list(text)
         with self._lock:
             self._learned = hosts
+            self._learned_at = stamps
             self._file_mtime = stat.st_mtime_ns
         logger.bind(count=len(hosts)).debug("Egress host list loaded")
 
@@ -365,10 +402,11 @@ class ProxyPolicy:
         """Write the learned hosts out atomically. A failure is logged, never raised."""
         if self._file is None:
             return
+        active = self._active_learned()
         with self._lock:
-            entries = sorted(self._learned.items())
+            stamps = dict(self._learned_at)
         body = _HOST_LIST_HEADER + "".join(
-            f"{host}\n" if tier == "warp" else f"{host} {tier}\n" for host, tier in entries
+            _host_line(host, tier, stamps.get(host)) for host, tier in sorted(active.items())
         )
         try:
             self._file.parent.mkdir(parents=True, exist_ok=True)
@@ -393,6 +431,9 @@ _HOST_LIST_HEADER: Final[str] = (
     "# One host per line; subdomains are covered; '#' starts a comment.\n"
     "#   host              -> through WARP\n"
     "#   host proton:nl    -> through the ProtonVPN exit in that country (nl, pl, ro)\n"
+    "# A line ending in learned=<UTC time> was learned from a refused direct attempt and is\n"
+    "# tried directly again after the configured number of days (7 by default); a line\n"
+    "# without it - hand-written, or pinned by /vpn - never expires.\n"
     "# A line is added when a direct connection is refused in a way that names the address\n"
     "# (reset, 403, geo-fence, bot wall), when a site answers through WARP with removed /\n"
     "# geo-blocked / unavailable and a ProtonVPN exit then works, or by /vpn [nl|pl|ro] <link>.\n"
@@ -402,26 +443,65 @@ _HOST_LIST_HEADER: Final[str] = (
 )
 
 
-def _parse_host_list(text: str) -> dict[str, str]:
-    """Return ``host -> tier`` from a host-list file, ignoring comments and blanks.
+_STAMP_FORMAT: Final[str] = "%Y-%m-%dT%H:%M:%SZ"
 
-    A bare host is the second tier (``warp``); ``host proton:nl`` is the third.
-    Anything else after the host is ignored rather than fatal - a typo in a
-    hand-edited file must not take the whole list with it.
+
+def _utc_now() -> datetime:
+    """Return the current time, UTC-aware."""
+    return datetime.now(UTC)
+
+
+def _host_line(host: str, tier: str, learned_at: datetime | None) -> str:
+    """Return one line of the host-list file."""
+    parts = [host]
+    if tier != "warp":
+        parts.append(tier)
+    if learned_at is not None:
+        parts.append(f"learned={learned_at.astimezone(UTC).strftime(_STAMP_FORMAT)}")
+    return " ".join(parts) + "\n"
+
+
+def _parse_host_list(text: str) -> tuple[dict[str, str], dict[str, datetime]]:
+    """Return ``host -> tier`` and ``host -> learned-at`` from a host-list file.
+
+    A bare host is the second tier (``warp``); ``host proton:nl`` is the third;
+    ``learned=<UTC time>`` marks a lesson that expires. Anything else after the
+    host is ignored rather than fatal - a typo in a hand-edited file must not
+    take the whole list with it.
     """
     hosts: dict[str, str] = {}
+    stamps: dict[str, datetime] = {}
     for raw_line in text.splitlines():
         line = raw_line.split("#", maxsplit=1)[0].strip().lower()
         if not line:
             continue
-        host, _, tier = line.partition(" ")
+        host, *rest = line.split()
         host = host.lstrip(".")
-        tier = tier.strip()
         if not host:
             continue
-        code = tier.removeprefix("proton:")
-        hosts[host] = tier if tier.startswith("proton:") and code else "warp"
-    return hosts
+        tier = "warp"
+        for token in rest:
+            if token.startswith("proton:") and token.removeprefix("proton:"):
+                tier = token
+            elif token.startswith("learned="):
+                stamp = _parse_stamp(token.removeprefix("learned="))
+                if stamp is not None:
+                    stamps[host] = stamp
+        hosts[host] = tier
+    return hosts, stamps
+
+
+def _parse_stamp(text: str) -> datetime | None:
+    """Return the UTC time a ``learned=`` token names, or ``None`` if it is garbled."""
+    try:
+        return datetime.strptime(text.upper(), _STAMP_FORMAT).replace(tzinfo=UTC)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _tier_for(host: str, learned: Mapping[str, str]) -> str | None:
@@ -729,12 +809,16 @@ class YtDlpDownloader:
         self._factory = youtube_dl_factory or default_youtube_dl_factory
         self._inspector = inspector
         self._proton = proton
+        self._prefer_muxed_hosts = frozenset(
+            host.lower().lstrip(".") for host in settings.prefer_muxed_hosts if host
+        )
         self._proxy_policy = proxy_policy or ProxyPolicy(
             settings.proxy,
             settings.proxy_hosts,
             impersonate=settings.impersonate,
             impersonate_hosts=settings.impersonate_hosts,
             learned_file=settings.egress_hosts_file,
+            learned_ttl_days=settings.egress_learned_ttl_days,
             proton_countries=proton.countries if proton is not None else (),
         )
 
@@ -806,9 +890,6 @@ class YtDlpDownloader:
         on_progress: ProgressCallback | None = None,
         cancellation: CancellationToken | None = None,
     ) -> DownloadResult:
-        self._prefer_muxed_hosts = frozenset(
-            host.lower().lstrip(".") for host in settings.prefer_muxed_hosts if host
-        )
         """Download the requested rendition into ``workspace``."""
         validated = self._validate(request.url)
         started_at = datetime.now(UTC)

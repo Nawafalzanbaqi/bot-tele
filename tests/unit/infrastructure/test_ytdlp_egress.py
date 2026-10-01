@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -135,6 +136,98 @@ class TestWhatEscalates:
             await downloader(settings(), factory).probe(URL)
 
         assert [options.get("proxy") for options in attempts] == [None]
+
+
+def _host_lines(hosts_file: Path) -> list[str]:
+    """Return the file's host lines, without the explanatory header."""
+    return [
+        line.strip()
+        for line in hosts_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+
+class TestALessonExpires:
+    """A host learned from a refused attempt is tried directly again after the TTL."""
+
+    def test_a_learned_host_is_stamped_and_expires(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        clock = {"now": datetime(2026, 10, 1, 8, 0, tzinfo=UTC)}
+        policy = ProxyPolicy(
+            PROXY, learned_file=hosts_file, learned_ttl_days=7, now=lambda: clock["now"]
+        )
+
+        policy.escalate("example.com")
+
+        assert policy.route_for("example.com") == ("warp", None)
+        assert "example.com learned=2026-10-01T08:00:00Z" in hosts_file.read_text(encoding="utf-8")
+        clock["now"] += timedelta(days=8)
+        assert policy.route_for("example.com") == ("direct", None), "tried directly again"
+        assert policy.routed() == ()
+        assert policy.escalate("example.com") == PROXY, "and can be learned afresh"
+
+    def test_a_pin_and_a_hand_written_line_never_expire(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("by.hand\n", encoding="utf-8")
+        clock = {"now": datetime(2026, 10, 1, 8, 0, tzinfo=UTC)}
+        policy = ProxyPolicy(
+            PROXY, learned_file=hosts_file, learned_ttl_days=1, now=lambda: clock["now"]
+        )
+
+        policy.pin("pinned.example")
+        clock["now"] += timedelta(days=400)
+
+        assert policy.route_for("by.hand") == ("warp", None)
+        assert policy.route_for("pinned.example") == ("warp", None)
+        assert not any("learned=" in line for line in _host_lines(hosts_file))
+
+    def test_an_expired_line_is_ignored_and_dropped_on_the_next_write(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text(
+            "old.example learned=2020-01-01T00:00:00Z\n"
+            "keep.example proton:nl learned=2026-10-01T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        policy = ProxyPolicy(
+            PROXY,
+            learned_file=hosts_file,
+            learned_ttl_days=7,
+            proton_countries=("nl",),
+            now=lambda: datetime(2026, 10, 2, tzinfo=UTC),
+        )
+
+        assert policy.route_for("old.example") == ("direct", None)
+        assert policy.route_for("keep.example") == ("proton", "nl")
+
+        policy.escalate("new.example")
+        text = hosts_file.read_text(encoding="utf-8")
+        assert "old.example" not in text
+        assert "keep.example proton:nl learned=2026-10-01T00:00:00Z" in text
+        assert "new.example learned=2026-10-02T00:00:00Z" in text
+
+    def test_a_pin_replaces_the_stamp(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, learned_ttl_days=7)
+
+        policy.escalate("example.com")
+        assert any("learned=" in line for line in _host_lines(hosts_file))
+        policy.pin("example.com", "warp")
+
+        assert not any("learned=" in line for line in _host_lines(hosts_file)), "pinned for good"
+
+    def test_without_a_ttl_nothing_expires(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("old.example learned=2000-01-01T00:00:00Z\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file)
+
+        assert policy.route_for("old.example") == ("warp", None)
+
+    def test_a_garbled_stamp_is_a_permanent_line(self, tmp_path: Path) -> None:
+        hosts_file = tmp_path / "egress-hosts.txt"
+        hosts_file.write_text("odd.example learned=yesterday\n", encoding="utf-8")
+        policy = ProxyPolicy(PROXY, learned_file=hosts_file, learned_ttl_days=1)
+
+        assert policy.route_for("odd.example") == ("warp", None)
 
 
 class TestTheLessonIsKept:
@@ -507,8 +600,9 @@ class TestTheThirdTier:
 
 
 def _hosts_in(path: Path) -> set[str]:
+    """Return the hosts named in the file: the first token of every host line."""
     return {
-        line.strip()
+        line.split()[0]
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     }
