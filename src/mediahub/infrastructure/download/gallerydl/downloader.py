@@ -426,6 +426,11 @@ class GalleryDlDownloader:
             gallery_dl.config.set((), "proxy", self._settings.proxy)
         if self._settings.user_agent:
             gallery_dl.config.set((), "user-agent", self._settings.user_agent)
+        # A TikTok photo post is pictures plus a track. The pictures are the
+        # post; the track is what the person hears when they open it, and it
+        # is delivered after the album as audio (2026-10-01).
+        gallery_dl.config.set(("extractor", "tiktok"), "audio", True)
+        gallery_dl.config.set(("extractor", "tiktok"), "videos", True)
 
 
 def _describe_source(seen: Seen, validated: ValidatedUrl) -> MediaMetadata:
