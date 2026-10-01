@@ -146,6 +146,9 @@ def _looks_like_video(entry: Mapping[str, Any]) -> bool:
     """
     if _declared_absent(entry, "vcodec"):
         return False
+    if (_text(entry, "ext") or "").lower() in _IMAGE_EXTENSIONS:
+        # A picture has a frame size too; it is still not a video.
+        return False
     return _integer(entry, "height") is not None or _integer(entry, "width") is not None
 
 
@@ -335,28 +338,33 @@ def to_metadata(info: Mapping[str, Any], *, url: str, probed_at: datetime) -> Me
         A metadata DTO. Missing fields become ``None`` rather than raising: a
         source that omits its duration is normal, not an error.
     """
-    videos, audios = split_formats(_format_entries(info))
+    is_playlist = info.get("_type") == "playlist"
+    album = album_entries(info) if is_playlist else ()
+    # An album is described by its first item: that is the rendition ladder
+    # the engine will apply to every item, and the kind the post is.
+    source = album[0] if album else info
+    videos, audios = split_formats(_format_entries(source))
 
-    raw_thumbnails = info.get("thumbnails")
+    raw_thumbnails = source.get("thumbnails")
     thumbnails = to_thumbnails(raw_thumbnails if isinstance(raw_thumbnails, list) else [])
     if not thumbnails:
-        single = _text(info, "thumbnail")
+        single = _text(source, "thumbnail")
         if single:
             thumbnails = (Thumbnail(url=single),)
 
-    is_playlist = info.get("_type") == "playlist"
-    duration = _number(info, "duration")
+    duration = _number(source, "duration")
 
     return MediaMetadata(
         url=url,
         provider=(_text(info, "extractor_key") or _text(info, "extractor") or "generic").lower(),
         provider_item_id=_text(info, "id"),
         title=_text(info, "title", limit=_MAX_TITLE_LENGTH) or "untitled",
-        kind=_classify(info, videos, audios),
+        kind=_classify(source, videos, audios),
         duration_ms=int(duration * _MS_PER_SECOND) if duration else None,
         is_live=_flag(info, "is_live") or info.get("live_status") == "is_live",
         is_playlist=is_playlist,
-        entry_count=_integer(info, "playlist_count") if is_playlist else None,
+        is_album=bool(album),
+        entry_count=_entry_count(info, album, is_playlist=is_playlist),
         uploader=_text(info, "uploader") or _text(info, "channel"),
         upload_date=_upload_date(info),
         description=_text(info, "description", limit=_MAX_DESCRIPTION_LENGTH),
@@ -369,14 +377,53 @@ def to_metadata(info: Mapping[str, Any], *, url: str, probed_at: datetime) -> Me
     )
 
 
+def _entry_count(
+    info: Mapping[str, Any], album: Sequence[Mapping[str, Any]], *, is_playlist: bool
+) -> int | None:
+    """Return how many items a collection holds: the album's own count, or what the engine said."""
+    if album:
+        return len(album)
+    return _integer(info, "playlist_count") if is_playlist else None
+
+
+def album_entries(info: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """Return a collection's entries when they are the items of one post.
+
+    The signature is strict on purpose: every entry is a complete media dict
+    (formats or a direct URL, not a link to extract later) and every entry
+    points back at the collection's own page. A channel, a playlist or a
+    search result fails that test; a carousel or a slideshow passes it. The
+    Threads extractor produces exactly this shape.
+    """
+    entries = info.get("entries")
+    page = _text(info, "webpage_url") or _text(info, "original_url")
+    if not page or not isinstance(entries, list) or not entries:
+        return ()
+    accepted: list[Mapping[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("_type") not in (None, "video"):
+            return ()
+        inline = bool(entry.get("formats")) or isinstance(entry.get("url"), str)
+        if not inline or _text(entry, "webpage_url") != page:
+            return ()
+        accepted.append(entry)
+    return tuple(accepted)
+
+
 def to_selected_format(info: Mapping[str, Any]) -> SelectedFormat:
     """Map the completed-download info dict to the rendition actually taken.
 
     yt-dlp reports the outcome under ``requested_downloads``; the top level is
-    used as a fallback for engines or code paths that do not populate it.
+    used as a fallback for engines or code paths that do not populate it. For
+    an album the first entry stands for the post.
     """
     requested = info.get("requested_downloads")
     source: Mapping[str, Any] = info
+    if not requested:
+        entries = info.get("entries")
+        if isinstance(entries, list) and entries and isinstance(entries[0], dict):
+            source = entries[0]
+            requested = source.get("requested_downloads")
     if isinstance(requested, list) and requested and isinstance(requested[0], dict):
         source = requested[0]
 

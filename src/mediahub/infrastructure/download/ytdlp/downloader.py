@@ -1107,7 +1107,7 @@ class YtDlpDownloader:
             expected_bytes=metadata.expected_bytes,
             egress=used.label,
         ).debug("Probed source")
-        if metadata.is_playlist:
+        if metadata.is_playlist and not metadata.is_album:
             return await self._first_of(metadata, info, timeout_seconds=timeout_seconds)
         return metadata
 
@@ -1318,9 +1318,14 @@ class YtDlpDownloader:
             message = f"'{validated.value}' completed without producing a file"
             raise MetadataUnavailableError(message)
 
-        primary_name = self._primary_name(info, produced)
+        members = _album_file_names(info, produced)
+        primary_name = members[0] if members else self._primary_name(info, produced)
+        companions = members[1:]
+        # Album items first and in the post's own order; everything else after.
+        ordered = [*members, *(name for name in produced if name not in members)]
         artifacts = tuple(
-            workspace.artifact(name, role=self._role_for(name, primary_name)) for name in produced
+            workspace.artifact(name, role=self._role_for(name, primary_name, companions))
+            for name in ordered
         )
         total_bytes = sum(artifact.size_bytes for artifact in artifacts)
         self._verify(artifacts, total_bytes=total_bytes, max_bytes=max_bytes, url=validated.value)
@@ -1345,7 +1350,7 @@ class YtDlpDownloader:
         if metadata.is_live and not request.allow_live:
             message = f"'{metadata.url}' is a live stream and live capture was not requested"
             raise LiveSourceNotAllowedError(message, provider=metadata.provider)
-        if metadata.is_playlist and not request.allow_playlist:
+        if metadata.is_playlist and not metadata.is_album and not request.allow_playlist:
             message = (
                 f"'{metadata.url}' is a collection and collection downloads were not requested"
             )
@@ -1400,10 +1405,14 @@ class YtDlpDownloader:
         return media[0] if media else produced[0]
 
     @staticmethod
-    def _role_for(name: str, primary_name: str) -> ArtifactRole:
+    def _role_for(
+        name: str, primary_name: str, companions: Sequence[str] = ()
+    ) -> ArtifactRole:
         """Classify one produced file."""
         if name == primary_name:
             return ArtifactRole.PRIMARY
+        if name in companions:
+            return ArtifactRole.COMPANION
         lowered = name.lower()
         if any(lowered.endswith(extension) for extension in _IMAGE_EXTENSIONS):
             return ArtifactRole.THUMBNAIL
@@ -1475,6 +1484,31 @@ class YtDlpDownloader:
             if name not in existing:
                 with contextlib.suppress(Exception):
                     workspace.remove(name)
+
+
+def _album_file_names(info: Mapping[str, Any], produced: Sequence[str]) -> list[str]:
+    """Return the files an album's entries reported, in entry order.
+
+    Empty for anything that is not an album download, so the single-file
+    path is untouched.
+    """
+    entries = info.get("entries")
+    if not isinstance(entries, list) or info.get("_type") != "playlist":
+        return []
+    names: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        requested = entry.get("requested_downloads")
+        if not (isinstance(requested, list) and requested and isinstance(requested[0], dict)):
+            continue
+        reported = requested[0].get("filepath") or requested[0].get("filename")
+        if not isinstance(reported, str):
+            continue
+        candidate = reported.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        if candidate in produced and candidate not in names:
+            names.append(candidate)
+    return names
 
 
 def _first_entry_url(info: Mapping[str, Any]) -> str | None:

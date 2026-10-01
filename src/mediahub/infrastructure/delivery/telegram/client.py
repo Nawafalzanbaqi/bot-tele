@@ -45,15 +45,25 @@ _Bot: Any = None
 _HTTPXRequest: Any = None
 _InlineKeyboardMarkup: Any = None
 _InlineKeyboardButton: Any = None
+_InputMediaPhoto: Any = None
+_InputMediaVideo: Any = None
 
 try:  # pragma: no cover - exercised by the presence or absence of the package
-    from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import (
+        Bot,
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+        InputMediaPhoto,
+        InputMediaVideo,
+    )
     from telegram.request import HTTPXRequest
 
     _Bot = Bot
     _HTTPXRequest = HTTPXRequest
     _InlineKeyboardMarkup = InlineKeyboardMarkup
     _InlineKeyboardButton = InlineKeyboardButton
+    _InputMediaPhoto = InputMediaPhoto
+    _InputMediaVideo = InputMediaVideo
 except ImportError:  # pragma: no cover - the library is an optional install
     pass
 
@@ -103,6 +113,29 @@ class UploadedMedia:
     bytes_sent: int
 
 
+@dataclass(frozen=True, slots=True)
+class GroupItem:
+    """One member of a grouped post.
+
+    Attributes:
+        kind: ``photo`` or ``video``; Telegram groups nothing else with them.
+        path: The file, inside the caller's lease.
+        caption: Text shown under the group. Telegram shows the first item's.
+        filename: Name to present it under.
+        width: Frame width, when known.
+        height: Frame height, when known.
+        duration_seconds: Video duration, when known.
+    """
+
+    kind: str
+    path: Path
+    caption: str | None = None
+    filename: str | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: int | None = None
+
+
 class TelegramUploader(Protocol):
     """Sends media to a chat. Everything the delivery provider needs.
 
@@ -130,6 +163,16 @@ class TelegramUploader(Protocol):
         ``local_path`` is an optimisation the provider offers and the client
         may ignore: where a self-hosted server can read the file itself, the
         bytes never pass through this process at all.
+        """
+        ...
+
+    async def send_media_group(
+        self, *, chat_id: str, items: Sequence[GroupItem]
+    ) -> list[UploadedMedia]:
+        """Post up to ten photos and videos as one grouped message.
+
+        Returns one entry per item, in order. Where a self-hosted server is in
+        use the paths are handed over; otherwise the bytes are read and sent.
         """
         ...
 
@@ -387,6 +430,53 @@ class PythonTelegramBotClient:
                 media = message.document
 
         return _uploaded(message, media, bytes_sent=_stream_size(content))
+
+    async def send_media_group(
+        self, *, chat_id: str, items: Sequence[GroupItem]
+    ) -> list[UploadedMedia]:
+        """Post the items as one grouped message, by path where the server allows it.
+
+        The library turns a ``Path`` into a ``file://`` reference on its own
+        (its ``InputMedia`` assumes local mode), which is exactly right against
+        a self-hosted server and wrong against the public API - there the
+        bytes are read and sent.
+        """
+        media: list[Any] = []
+        opened: list[Any] = []
+        for item in items:
+            source: Any = item.path
+            if not self._local_mode:
+                source = item.path.open("rb")
+                opened.append(source)
+            if item.kind == "video":
+                media.append(
+                    _InputMediaVideo(
+                        media=source,
+                        caption=item.caption,
+                        filename=item.filename,
+                        width=item.width,
+                        height=item.height,
+                        duration=item.duration_seconds,
+                        supports_streaming=True,
+                    )
+                )
+            else:
+                media.append(
+                    _InputMediaPhoto(media=source, caption=item.caption, filename=item.filename)
+                )
+        try:
+            messages = await self._bot.send_media_group(chat_id=chat_id, media=media)
+        finally:
+            for handle in opened:
+                handle.close()
+        uploaded: list[UploadedMedia] = []
+        for message in messages:
+            photo = message.photo[-1] if getattr(message, "photo", None) else None
+            attached = (
+                getattr(message, "video", None) or photo or getattr(message, "document", None)
+            )
+            uploaded.append(_uploaded(message, attached, bytes_sent=0))
+        return uploaded
 
     async def send_by_reference(
         self,

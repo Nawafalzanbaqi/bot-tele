@@ -35,6 +35,8 @@ from mediahub.application.delivery.ports import (
 from mediahub.domain.common.fingerprint import Fingerprint, HashAlgorithm
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from mediahub.application.delivery.ports import (
         DeliveryProgressCallback,
         DeliveryRequest,
@@ -75,7 +77,9 @@ class FakeDeliveryProvider:
     supports_resend: bool = True
     fail_with: Exception | None = None
     fail_times: int | None = None
+    supports_albums: bool = True
     delivered: list[DeliveryRequest] = field(default_factory=list)
+    albums: list[list[DeliveryRequest]] = field(default_factory=list)
     resent: list[ResendRequest] = field(default_factory=list)
     progress: list[DeliveryProgress] = field(default_factory=list)
     calls: int = 0
@@ -97,6 +101,7 @@ class FakeDeliveryProvider:
             supports_metadata=True,
             supports_thumbnails=True,
             supports_history=False,
+            supports_albums=self.supports_albums,
             can_serve_back=self.can_serve_back,
             max_caption_length=200,
             allowed_kinds=frozenset(DeliveryKind),
@@ -132,6 +137,30 @@ class FakeDeliveryProvider:
         self._report(on_progress, DeliveryStage.UPLOADING, size, size)
         self.delivered.append(request)
         return self._receipt(size=size, reused=False)
+
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Record the group and answer with one receipt for all of it."""
+        self.calls += 1
+        self._maybe_fail()
+        capabilities = self.capabilities()
+        total = 0
+        for request in requests:
+            if not capabilities.accepts(request.artifact.size_bytes):
+                raise ArtifactTooLargeError(
+                    capabilities.maximum_file_size,
+                    request.artifact.size_bytes,
+                    provider=self.provider_name,
+                )
+            total += workspace.path_for(request.artifact.name).stat().st_size
+        self._report(on_progress, DeliveryStage.UPLOADING, total, total)
+        self.albums.append(list(requests))
+        return self._receipt(size=total, reused=False)
 
     async def resend(self, request: ResendRequest) -> DeliveryReceipt:
         """Record the re-send and answer with a zero-byte receipt."""

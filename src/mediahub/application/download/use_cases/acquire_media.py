@@ -44,6 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mediahub.application.delivery.ports import (
         DeliveryCapabilities,
         DeliveryProgressCallback,
+        DeliveryReceipt,
         DeliveryRouter,
     )
     from mediahub.application.download.dto import AcquireMediaCommand
@@ -73,6 +74,29 @@ _KIND_MAP: dict[MediaType, DeliveryKind] = {
     MediaType.AUDIO: DeliveryKind.AUDIO,
     MediaType.IMAGE: DeliveryKind.PHOTO,
 }
+
+_ALBUM_KINDS: frozenset[DeliveryKind] = frozenset({DeliveryKind.PHOTO, DeliveryKind.VIDEO})
+"""What a destination groups into one post. Documents and audio travel alone."""
+
+_IMAGE_SUFFIXES: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif")
+_AUDIO_SUFFIXES: tuple[str, ...] = (".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wav", ".flac")
+_VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".m4v", ".webm", ".mkv")
+
+
+def _kind_of_file(name: str) -> DeliveryKind:
+    """Decide how a companion file is presented, from its name.
+
+    A companion has no probe of its own - it is the second picture of a
+    carousel or the track under a slideshow - so the suffix is what there is.
+    """
+    lowered = name.lower()
+    if lowered.endswith(_IMAGE_SUFFIXES):
+        return DeliveryKind.PHOTO
+    if lowered.endswith(_AUDIO_SUFFIXES):
+        return DeliveryKind.AUDIO
+    if lowered.endswith(_VIDEO_SUFFIXES):
+        return DeliveryKind.VIDEO
+    return DeliveryKind.DOCUMENT
 
 
 class AcquireMedia:
@@ -184,7 +208,10 @@ class AcquireMedia:
                     url=request.url,
                     selection=selection,
                     max_bytes=ceiling,
-                    include_thumbnail=True,
+                    # An album is fetched whole; its poster would be one more
+                    # file to tell apart from the pictures it is a poster of.
+                    include_thumbnail=not metadata.is_album,
+                    allow_playlist=metadata.is_album,
                 ),
                 scope,
                 on_progress=on_progress,
@@ -194,27 +221,27 @@ class AcquireMedia:
 
             self._check_deliverable(result.primary, capabilities)
             kind = self._kind_for(metadata, chosen, result.selected_format)
-            receipt = await self._delivery.deliver(
-                DeliveryRequest(
-                    target=request.target,
-                    artifact=result.primary,
-                    kind=kind,
-                    caption=request.caption or metadata.title,
-                    filename=result.primary.name,
-                    duration_seconds=_seconds(metadata),
-                    width=result.selected_format.width,
-                    height=result.selected_format.height,
-                    thumbnail=_thumbnail_of(result.artifacts),
-                ),
-                scope,
-                on_progress=on_delivery_progress,
+            primary = DeliveryRequest(
+                target=request.target,
+                artifact=result.primary,
+                kind=kind,
+                caption=request.caption or metadata.title,
+                filename=result.primary.name,
+                duration_seconds=_seconds(metadata),
+                width=result.selected_format.width,
+                height=result.selected_format.height,
+                thumbnail=_thumbnail_of(result.artifacts),
             )
-
             # A carousel is one request and several files. Delivering only the
             # first is the difference between "it works" and "it lost half my
             # post", and the caller cannot tell which happened.
-            extra = await self._deliver_companions(
-                result, request=request, capabilities=capabilities, scope=scope
+            receipt, extra = await self._deliver_all(
+                primary,
+                result,
+                request=request,
+                capabilities=capabilities,
+                scope=scope,
+                on_delivery_progress=on_delivery_progress,
             )
             delivered_at = time.monotonic()
 
@@ -316,6 +343,62 @@ class AcquireMedia:
             return delivery_limit
         return min(self._max_item_bytes, delivery_limit)
 
+    async def _deliver_all(
+        self,
+        primary: DeliveryRequest,
+        result: DownloadResult,
+        *,
+        request: AcquireMediaCommand,
+        capabilities: DeliveryCapabilities,
+        scope: WorkspaceScope,
+        on_delivery_progress: DeliveryProgressCallback | None,
+    ) -> tuple[DeliveryReceipt, int]:
+        """Deliver the primary and every companion; return the receipt and how many more went.
+
+        Where the destination can group and the items are photos or videos,
+        the post goes as one album - a carousel arrives as a carousel. Audio
+        (a slideshow's track) follows on its own. Otherwise, or when the
+        primary has to go as a document, items go one by one as before.
+        """
+        companions = [
+            artifact for artifact in result.artifacts if artifact.role is ArtifactRole.COMPANION
+        ]
+        if not companions or not capabilities.supports_albums or primary.kind not in _ALBUM_KINDS:
+            receipt = await self._delivery.deliver(primary, scope, on_progress=on_delivery_progress)
+            extra = await self._deliver_companions(
+                result, request=request, capabilities=capabilities, scope=scope
+            )
+            return receipt, extra
+
+        album: list[DeliveryRequest] = [primary]
+        afterwards: list[DeliveryRequest] = []
+        for artifact in companions:
+            if not capabilities.accepts(artifact.size_bytes):
+                logger.bind(name=artifact.name, bytes=artifact.size_bytes).warning(
+                    "Skipped an item of this post: the destination will not accept it"
+                )
+                continue
+            item = DeliveryRequest(
+                target=request.target,
+                artifact=artifact,
+                kind=_kind_of_file(artifact.name),
+                caption=None,
+                filename=artifact.name,
+            )
+            (album if item.kind in _ALBUM_KINDS else afterwards).append(item)
+        receipt = await self._delivery.deliver_album(album, scope, on_progress=on_delivery_progress)
+        sent = len(album) - 1
+        for item in afterwards:
+            try:
+                await self._delivery.deliver(item, scope)
+            except DeliveryError as error:
+                logger.bind(name=item.artifact.name, code=error.code).warning(
+                    "Skipped an item of this post: {}", error.message
+                )
+                continue
+            sent += 1
+        return receipt, sent
+
     async def _deliver_companions(
         self,
         result: DownloadResult,
@@ -347,7 +430,7 @@ class AcquireMedia:
                     DeliveryRequest(
                         target=request.target,
                         artifact=artifact,
-                        kind=DeliveryKind.PHOTO,
+                        kind=_kind_of_file(artifact.name),
                         caption=None,
                         filename=artifact.name,
                     ),

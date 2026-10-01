@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from mediahub.application.credentials.errors import InvalidCookieJarError
 from mediahub.application.credentials.ports import CookieSummary
 from mediahub.infrastructure.credentials.cookie_jar import decode, parse
-from mediahub.infrastructure.delivery.telegram.client import UploadedMedia
+from mediahub.infrastructure.delivery.telegram.client import GroupItem, UploadedMedia
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -144,6 +144,7 @@ class FakeUploader:
 
     error: Exception | None = None
     uploads: list[dict[str, Any]] = field(default_factory=list)
+    groups: list[list[tuple[str, str, str | None]]] = field(default_factory=list)
     resends: list[dict[str, Any]] = field(default_factory=list)
     message_id: int = 500
     read_size: int = 8192
@@ -198,6 +199,26 @@ class FakeUploader:
             file_unique_id="UNIQ-ABC",
             bytes_sent=size,
         )
+
+    async def send_media_group(
+        self, *, chat_id: str, items: Sequence[GroupItem]
+    ) -> list[UploadedMedia]:
+        """Record the group and answer one message per item."""
+        if self.error is not None:
+            raise self.error
+        self.groups.append([(item.kind, item.path.name, item.caption) for item in items])
+        answers: list[UploadedMedia] = []
+        for index, item in enumerate(items):
+            answers.append(
+                UploadedMedia(
+                    message_id=self.message_id + index,
+                    chat_id=chat_id,
+                    file_id=f"FILE-{item.path.name}",
+                    file_unique_id=f"UNIQ-{item.path.name}",
+                    bytes_sent=0,
+                )
+            )
+        return answers
 
     async def send_by_reference(
         self,

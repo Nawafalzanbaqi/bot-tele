@@ -69,6 +69,8 @@ class FakeDownloader:
     fetch_error: BaseException | None = None
     fetch_error_times: int | None = None
     leave_partial: bool = False
+    companions: tuple[str, ...] = ()
+    """Extra items of the same post the fetch should produce, by file name."""
     on_fetch: Callable[[WorkspaceScope], None] | None = None
     probe_calls: int = 0
     fetch_calls: int = 0
@@ -136,6 +138,9 @@ class FakeDownloader:
         self._maybe_fail(workspace)
 
         artifacts = [self._write(workspace, ArtifactRole.PRIMARY, "mp4", self.size_bytes)]
+        for name in self.companions:
+            (workspace.directory() / name).write_bytes(b"c" * 512)
+            artifacts.append(workspace.artifact(name, role=ArtifactRole.COMPANION))
         if self.thumbnail_bytes and request.include_thumbnail:
             artifacts.append(
                 self._write(workspace, ArtifactRole.THUMBNAIL, "jpg", self.thumbnail_bytes)

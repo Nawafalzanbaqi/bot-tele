@@ -37,6 +37,8 @@ from mediahub.application.delivery.ports import (
 from mediahub.infrastructure.delivery.shared.measured_reader import MeasuredReader
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
+
     from mediahub.application.delivery.ports import (
         DeliveryProgressCallback,
         DeliveryRequest,
@@ -143,6 +145,26 @@ class DummyDeliveryProvider:
             can_serve_back=False,
             checksum=checksum,
         )
+
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Discard every item in turn; the receipt is the first item's.
+
+        Nothing groups here, so the album is only a sequence of deliveries -
+        which is what the protocol promises when a destination cannot group.
+        """
+        if not requests:
+            message = "an album needs at least one item"
+            raise ValueError(message)
+        first = await self.deliver(requests[0], workspace, on_progress=on_progress)
+        for request in requests[1:]:
+            await self.deliver(request, workspace)
+        return first
 
     async def resend(self, request: ResendRequest) -> DeliveryReceipt:
         """Refuse: nothing was kept, so nothing can be sent again.

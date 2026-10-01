@@ -50,6 +50,7 @@ from mediahub.application.delivery.ports import (
     RemoteMessageRef,
 )
 from mediahub.infrastructure.delivery.shared.measured_reader import MeasuredReader
+from mediahub.infrastructure.delivery.telegram.client import GroupItem
 from mediahub.infrastructure.delivery.telegram.errors import (
     PROVIDER,
     classify,
@@ -57,6 +58,8 @@ from mediahub.infrastructure.delivery.telegram.errors import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
+
     from mediahub.application.delivery.ports import (
         DeliveryProgressCallback,
         DeliveryRequest,
@@ -98,6 +101,9 @@ MAX_RETRY_DELAY_SECONDS: Final[float] = 30.0
 
 MAX_THUMBNAIL_BYTES: Final[int] = 200 * 1024
 """What Telegram accepts as a poster image, alongside "JPEG, and nothing else"."""
+
+MAX_ALBUM_ITEMS: Final[int] = 10
+"""Telegram's ceiling on one media group."""
 
 
 class TelegramDeliveryProvider:
@@ -153,6 +159,8 @@ class TelegramDeliveryProvider:
             supports_metadata=True,
             supports_thumbnails=True,
             supports_history=True,
+            # Photos and videos of one post go as one grouped message.
+            supports_albums=True,
             max_caption_length=MAX_CAPTION_LENGTH,
             allowed_kinds=frozenset(DeliveryKind),
         )
@@ -217,6 +225,71 @@ class TelegramDeliveryProvider:
             size_bytes=uploaded.bytes_sent or measured,
             started=started,
             checksum=checksum,
+            reused=False,
+        )
+
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Post the artifacts as grouped messages of up to ten, by path where possible.
+
+        Telegram caps a media group at ten items; a longer carousel goes as
+        consecutive groups. The receipt describes the first item: it is what
+        the journal records and what a later re-send would reference.
+        """
+        if not requests:
+            message = "an album needs at least one item"
+            raise classify(ValueError(message), detail="empty album")
+        chat = self._chat_of(requests[0].target)
+        total = 0
+        for request in requests:
+            size = request.artifact.size_bytes
+            if size > self._max_bytes:
+                raise ArtifactTooLargeError(self._max_bytes, size, provider=PROVIDER)
+            total += size
+        started = time.monotonic()
+        _report(on_progress, DeliveryStage.PREPARING, 0, total)
+        first: UploadedMedia | None = None
+        sent = 0
+        for start in range(0, len(requests), MAX_ALBUM_ITEMS):
+            chunk = requests[start : start + MAX_ALBUM_ITEMS]
+            items = [
+                GroupItem(
+                    kind="video" if request.kind is DeliveryKind.VIDEO else "photo",
+                    path=workspace.path_for(request.artifact.name),
+                    caption=_truncate(request.caption),
+                    filename=request.filename or request.artifact.name,
+                    width=request.width,
+                    height=request.height,
+                    duration_seconds=request.duration_seconds,
+                )
+                for request in chunk
+            ]
+            _report(on_progress, DeliveryStage.UPLOADING, sent, total)
+            try:
+                uploaded = await self._uploader.send_media_group(chat_id=chat, items=items)
+            except Exception as exc:
+                raise classify(exc, detail="album") from exc
+            if first is None and uploaded:
+                first = uploaded[0]
+            sent += sum(request.artifact.size_bytes for request in chunk)
+        _report(on_progress, DeliveryStage.COMPLETED, total, total)
+        if first is None:
+            message = "the destination returned no message for the album"
+            raise classify(RuntimeError(message), detail="empty answer")
+        logger.bind(provider=PROVIDER, items=len(requests), bytes=total).info("Delivered album")
+        return self._receipt(
+            remote_id=first.file_id,
+            remote_unique_id=first.file_unique_id,
+            container_id=first.chat_id,
+            message_id=first.message_id,
+            size_bytes=total,
+            started=started,
+            checksum=None,
             reused=False,
         )
 

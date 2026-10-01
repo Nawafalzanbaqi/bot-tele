@@ -51,13 +51,13 @@ class TestFormatExpression:
         expression = build_format_expression(FormatSelection.best())
 
         assert "+" not in expression, "merging requires FFmpeg and must be opt-in"
-        assert expression.endswith("/b")
+        assert expression.endswith("/b/b*"), "a single file, then anything at all - an image"
 
     def test_best_with_merge_allows_separate_streams(self) -> None:
         expression = build_format_expression(FormatSelection.best(allow_merge=True))
 
         assert "bv*+ba" in expression
-        assert expression.endswith("/b"), "must still fall back to a single file"
+        assert expression.endswith("/b/b*"), "must still fall back to a single file, then an image"
 
     def test_height_cap_is_applied(self) -> None:
         assert "[height<=720]" in build_format_expression(FormatSelection.up_to_height(720))
@@ -77,7 +77,7 @@ class TestFormatExpression:
         expression = build_format_expression(FormatSelection(prefer_container="mp4"))
 
         assert "[ext=mp4]" in expression
-        assert expression.endswith("/b")
+        assert expression.endswith("/b/b*")
 
     def test_filesize_filter_admits_unknown_sizes(self) -> None:
         expression = build_format_expression(FormatSelection(max_filesize_bytes=1000))
@@ -401,7 +401,7 @@ class TestPlayableOutput:
         )
 
         assert "/bv*[height<=1080]+ba" in expression
-        assert expression.endswith("/b")
+        assert expression.endswith("/b/b*")
 
     def test_a_muxed_file_not_declared_vp9_or_av1_can_outrank_the_fallback(self) -> None:
         """Instagram/Facebook: the H.264 file carries no codec field; it must still win."""

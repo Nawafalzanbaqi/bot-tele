@@ -79,9 +79,18 @@ def _best_single(selection: FormatSelection) -> str:
     constrained = f"b{_constraints(selection)}"
     if selection.prefer_container:
         # Try the preferred container first, then any container.
-        return f"{constrained}/b{_constraints(selection, include_container=False)}/b"
-    return f"{constrained}/b"
+        loose = _constraints(selection, include_container=False)
+        return f"{constrained}/b{loose}/b{IMAGE_FALLBACK}"
+    return f"{constrained}/b{IMAGE_FALLBACK}"
 
+
+IMAGE_FALLBACK: Final[str] = "/b*"
+"""The very last resort: any format at all, including an image.
+
+``b`` means "best file with both video and audio" and refuses a picture
+outright; a Threads or TikTok image is a format with neither stream, and
+``b*`` is the selector that takes it. Last, so nothing that has a video
+changes."""
 
 COMPATIBLE_VIDEO: Final[str] = "[vcodec^=avc1]"
 """H.264. Decoded in hardware by every phone, browser and chat client."""

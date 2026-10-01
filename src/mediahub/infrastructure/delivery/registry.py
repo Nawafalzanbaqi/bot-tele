@@ -164,6 +164,23 @@ class DeliveryProviderRegistry:
             lambda: provider.deliver(request, workspace, on_progress=on_progress),
         )
 
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Route the grouped request to its provider and deliver it."""
+        if not requests:
+            message = "an album needs at least one item"
+            raise ValueError(message)
+        provider = self.provider_for(requests[0].target)
+        return await self._guard(
+            provider.name,
+            lambda: provider.deliver_album(requests, workspace, on_progress=on_progress),
+        )
+
     async def resend(self, request: ResendRequest) -> DeliveryReceipt:
         """Route the request to its provider and re-send it."""
         provider = self.provider_for(request.target)

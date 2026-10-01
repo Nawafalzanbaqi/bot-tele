@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 PERCENT: Final[int] = 100
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from datetime import datetime, timedelta
 
     from mediahub.application.workspace.ports import ArtifactRef, WorkspaceScope
@@ -220,6 +220,10 @@ class DeliveryCapabilities:
         supports_metadata: Titles, durations and dimensions are preserved.
         supports_thumbnails: A poster image can accompany the artifact.
         supports_history: The destination keeps its own record of what was sent.
+        supports_albums: Several photos and videos of one post can go as one
+            grouped message, so a carousel arrives as a carousel.
+        supports_albums: Several photos and videos of one post can go as one
+            grouped message, so a carousel arrives as a carousel.
         can_serve_back: Stored bytes can be retrieved again. **This is the flag
             that decides whether the local copy may be deleted.**
         max_caption_length: Longest caption, when the destination has a limit.
@@ -235,6 +239,7 @@ class DeliveryCapabilities:
     supports_metadata: bool = False
     supports_thumbnails: bool = False
     supports_history: bool = False
+    supports_albums: bool = False
     can_serve_back: bool = False
     max_caption_length: int | None = None
     allowed_kinds: frozenset[DeliveryKind] = field(default_factory=lambda: frozenset(DeliveryKind))
@@ -410,6 +415,21 @@ class DeliveryProvider(Protocol):
         """
         ...
 
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Send several artifacts as one grouped post; the receipt is the first item's.
+
+        Only where :attr:`DeliveryCapabilities.supports_albums` is declared; the
+        caller falls back to one delivery per item otherwise. Every request
+        names the same target, and only photos and videos may be grouped.
+        """
+        ...
+
     async def resend(self, request: ResendRequest) -> DeliveryReceipt:
         """Re-deliver something the destination already holds.
 
@@ -461,6 +481,16 @@ class DeliveryRouter(Protocol):
         on_progress: DeliveryProgressCallback | None = None,
     ) -> DeliveryReceipt:
         """Route the request to its provider and deliver it."""
+        ...
+
+    async def deliver_album(
+        self,
+        requests: Sequence[DeliveryRequest],
+        workspace: WorkspaceScope,
+        *,
+        on_progress: DeliveryProgressCallback | None = None,
+    ) -> DeliveryReceipt:
+        """Route the grouped request to its provider and deliver it."""
         ...
 
     async def resend(self, request: ResendRequest) -> DeliveryReceipt:

@@ -328,6 +328,10 @@ class MediaMetadata:
     is_playlist: bool = False
     entry_count: int | None = None
     from_playlist: bool = False
+    is_album: bool = False
+    """A collection whose entries are the items of one post (a carousel, a
+    slideshow): fetched whole and delivered together, never resolved to its
+    first entry."""
     uploader: str | None = None
     upload_date: datetime | None = None
     description: str | None = None
